@@ -40,6 +40,8 @@ parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--freq_th', default=20, type=int)
 parser.add_argument('--noise_depth', default=32, type=int)
+parser.add_argument('--a', default=1., type=float)
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -47,6 +49,7 @@ imsize = -1
 PLOT = True
 sigma = 25
 sigma_ = sigma/255.
+gaussian_a = args.a
 
 if args.index == -1:
     fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
@@ -54,17 +57,20 @@ if args.index == -1:
     if args.dataset_index != -1:
         fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
 elif args.index == -2:
-    # k = 8
+    base_path = './data/videos/blackswan_cropped_30'
+    save_dir = 'plots/{}/denoising'.format(base_path.split('/')[-1])
+    os.makedirs(save_dir, exist_ok=True)
     # fnames = sorted(glob.glob('./data/videos/rollerblade/*.png'))
     # fnames = sorted(glob.glob('./data/videos/blackswan/*.png'))
     # fnames = sorted(glob.glob('./data/videos/judo/*.jpg'))
-    fnames = sorted(glob.glob('./data/videos/dog/*.jpg'))
+    fnames = sorted(glob.glob(base_path + '/*.jpg'))
     # fnames = sorted(glob.glob('./data/videos/tennis/*.png'))
     fnames_list = fnames
     # fnames_list = np.random.choice(fnames, 8, replace=False)
 else:
     fnames = ['data/denoising/F16_GT.png', 'data/inpainting/kate.png', 'data/inpainting/vase.png',
-              'data/sr/zebra_GT.png', 'data/denoising/synthetic_img.png', 'data/denoising/synthetic3_img_600.png']
+              'data/sr/zebra_GT.png', 'data/denoising/synthetic_img.png', 'data/denoising/synthetic3_img_600.png',
+              'data/denoising/synthetic4_img_600.png']
     fnames_list = [fnames[args.index]]
 
 training_times = []
@@ -140,13 +146,14 @@ for fname in fnames_list:
         #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
-        num_iter = 1801
+        num_iter = 3000
         figsize = 4
         freq_dict = {
             'method': 'log',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
             'base': 2 ** (adapt_lim / (args.num_freqs-1)),
+            # 'base': 2,
         }
 
         if INPUT == 'noise':
@@ -161,6 +168,8 @@ for fname in fnames_list:
                       skip_n33u=128,
                       skip_n11=4,
                       num_scales=5,
+                      # act_fun='Gaussian',
+                      # gaussian_a=gaussian_a,
                       upsample_mode='bilinear').type(dtype)
 
         # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
@@ -240,8 +249,8 @@ for fname in fnames_list:
             print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
                 i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
             psnr_gt_list.append(psrn_gt)
-            # wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
-            #                                           caption='step {}'.format(i))}, commit=False)
+            wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
+                                                      caption='step {}'.format(i))}, commit=False)
             # visualize_fourier(out[0].detach().cpu(), iter=i)
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
@@ -275,15 +284,16 @@ for fname in fnames_list:
         'input type': INPUT,
         'Train input': train_input,
         'Reg. Noise STD': reg_noise_std,
+        'gaussian_a': gaussian_a
     }
     log_config.update(**freq_dict)
     filename = os.path.basename(fname).split('.')[0]
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising'],
-                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='dog_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, args.freq_lim),
+                           'denoising', 'rebattle'],
+                     name='{}_depth_{}_{}_{}'.format(filename, input_depth, '{}'.format(INPUT), gaussian_a),
+                     job_type='{}_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim, gaussian_a),
                      group='Denoising',
                      mode='online',
                      save_code=True,
@@ -314,8 +324,8 @@ for fname in fnames_list:
     t_training = time.time() - t
     training_times.append(t_training)
     print('Training time: {}'.format(t_training))
-    wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
-               'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
+    # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
+    #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
     if INPUT == 'infer_freqs':
         if freq_dict['method'] == 'learn2':
@@ -333,7 +343,12 @@ for fname in fnames_list:
     log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
     wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
     wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
-    wandb.log({'training_time': t_training}, commit=False)
+    # wandb.log({'training_time': t_training}, commit=False)
+    if args.index == -2:
+        print(compare_psnr(out_np, img_np))
+        img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+        img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+
     q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
     plt.plot(psnr_gt_list)
     plt.title('max: {}\nlast: {}'.format(max(psnr_gt_list), psnr_gt_list[-1]))

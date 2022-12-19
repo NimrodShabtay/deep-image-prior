@@ -122,10 +122,8 @@ OPTIMIZER = 'adam'  # 'LBFGS'
 exp_weight = 0.99
 if mode == '2d':
     show_every = 300  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
-    n_epochs = 15000  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
-else:
-    show_every = 300
-    n_epochs = 5000
+    n_epochs = 5000  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
+
 
 num_iter = 1
 figsize = 4
@@ -203,12 +201,12 @@ def train_batch(batch_data):
     else:
         out = net_out
 
-    total_loss = mse(out, batch_data['img_noisy_batch'])
+    total_loss = mse(out, batch_data['img_degraded_batch'])
     # total_loss = total_loss / accum_iter
     total_loss.backward()
 
     out_np = out.detach().cpu().numpy()
-    psrn_noisy = compare_psnr(batch_data['img_noisy_batch'].cpu().numpy(), out_np)
+    psrn_noisy = compare_psnr(batch_data['img_degraded_batch'].cpu().numpy(), out_np)
     psrn_gt = compare_psnr(batch_data['gt_batch'].numpy(), out_np)
 
     wandb.log({'batch loss': total_loss.item(), 'psnr_noisy': psrn_noisy, 'psnr_gt': psrn_gt}, commit=True)
@@ -220,6 +218,7 @@ optimizer = torch.optim.Adam(p, lr=LR)
 log_config = {
     "learning_rate": LR,
     "iteration per batch": num_iter,
+    'Epochs': n_epochs,
     'optimizer': OPTIMIZER,
     'loss': type(mse).__name__,
     'input depth': input_depth,
