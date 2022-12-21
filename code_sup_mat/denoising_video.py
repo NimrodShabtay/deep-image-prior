@@ -197,7 +197,7 @@ print(net)
 n_batches = vid_dataset.n_batches
 img_idx = []
 
-video_name = os.path.basename(args.input_vid_path[:-len('.avi')])
+video_name = os.path.splitext(os.path.basename(args.input_vid_path))[0]
 os.makedirs('output/' + video_name, exist_ok=True)
 f_csv = f = open('output/' + video_name + '/psnr.csv', 'w')
 csv_writer = csv.writer(f)

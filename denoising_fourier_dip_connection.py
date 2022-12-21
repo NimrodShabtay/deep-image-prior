@@ -315,7 +315,7 @@ for fname in fnames_list:
                      mode='online',
                      save_code=True,
                      config=log_config,
-                     notes='Weight vector [32], U[0, 0.1] - Fixed'
+                     notes='Connection between Fourier and DIP / PIP'
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
