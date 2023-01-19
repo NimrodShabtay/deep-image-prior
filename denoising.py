@@ -90,17 +90,10 @@ for fname in fnames_list:
         img_pil = crop_image(get_image(fname, imsize)[0], d=32)
         img_np = pil_to_np(img_pil)
         output_depth = img_np.shape[0]
-        # if args.index == -2:
-        #     from utils.video_utils import crop_and_resize
-        #     img_np = crop_and_resize(img_np.transpose(1, 2, 0), (192, 384))
-        #     img_np = img_np.transpose(2, 0, 1)
-        #     img_pil = np_to_pil(img_np)
 
         img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
         # img_noisy_pil, img_noisy_np = img_pil, img_np
 
-        # if PLOT:
-        #     plot_image_grid([img_np, img_noisy_np], 4, 6)
     else:
         assert False
 
@@ -153,7 +146,6 @@ for fname in fnames_list:
             'cosine_only': False,
             'n_freqs': args.num_freqs,
             'base': 2 ** (adapt_lim / (args.num_freqs-1)),
-            # 'base': 2,
         }
 
         if INPUT == 'noise':
@@ -170,6 +162,7 @@ for fname in fnames_list:
                       num_scales=5,
                       # act_fun='Gaussian',
                       # gaussian_a=gaussian_a,
+                      act_fun='LeakyReLU',
                       upsample_mode='bilinear').type(dtype)
 
         # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
@@ -177,7 +170,6 @@ for fname in fnames_list:
     else:
         assert False
 
-    enc = LearnableFourierPositionalEncoding(2, (img_pil.size[1], img_pil.size[0]), 256, 128, input_depth, 10).type(dtype)
     net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
 
     # Compute number of parameters
@@ -219,10 +211,8 @@ for fname in fnames_list:
             else:
                 net_input_ = net_input_saved
 
-            if freq_dict['method'] == 'learn2':
-                net_input = enc(net_input_)
-            else:
-                net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+            net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+
         else:
             net_input = net_input_saved
 
@@ -254,17 +244,17 @@ for fname in fnames_list:
             # visualize_fourier(out[0].detach().cpu(), iter=i)
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
-        # if i % show_every:
-        #     if psrn_noisy - psrn_noisy_last < -2:
-        #         print('Falling back to previous checkpoint.')
-        #
-        #         for new_param, net_param in zip(last_net, net.parameters()):
-        #             net_param.data.copy_(new_param.cuda())
-        #
-        #         return total_loss * 0
-        #     else:
-        #         last_net = [x.detach().cpu() for x in net.parameters()]
-        #         psrn_noisy_last = psrn_noisy
+        if i % show_every:
+            if psrn_noisy - psrn_noisy_last < -2:
+                print('Falling back to previous checkpoint.')
+
+                for new_param, net_param in zip(last_net, net.parameters()):
+                    net_param.data.copy_(new_param.cuda())
+
+                return total_loss * 0
+            else:
+                last_net = [x.detach().cpu() for x in net.parameters()]
+                psrn_noisy_last = psrn_noisy
 
         i += 1
 
@@ -302,7 +292,6 @@ for fname in fnames_list:
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
-    # wandb.watch(net, 'all')
     log_input_images(img_noisy_np, img_np)
     # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
     print('Number of params: %d' % s)
@@ -328,11 +317,8 @@ for fname in fnames_list:
     #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
     if INPUT == 'infer_freqs':
-        if freq_dict['method'] == 'learn2':
-            net_input = enc(net_input_saved)
-        else:
-            net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
-                                                      only_cosine=freq_dict['cosine_only'])
+        net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
+                                                  only_cosine=freq_dict['cosine_only'])
         if train_input:
             log_inputs(net_input)
     else:

@@ -118,7 +118,7 @@ for path_to_image in fnames_list:
                   skip_n33u=128,
                   skip_n11=4,
                   num_scales=5,
-                  act_fun='Gaussian',
+                  # act_fun='Gaussian',
                   upsample_mode='bilinear').type(dtype)
     # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
     # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
@@ -243,7 +243,6 @@ for path_to_image in fnames_list:
     psnr_LR_last = 0
     reduce_lr = True
     i = 0
-    early_stopping = 2000
 
     s = sum([np.prod(list(p.size())) for p in net.parameters()])
     print('Number of params: %d' % s)
