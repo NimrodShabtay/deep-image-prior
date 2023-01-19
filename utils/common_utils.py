@@ -163,6 +163,8 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
 
         fill_noise(net_input, noise_type)
         net_input *= var
+        # net_input -= net_input.mean()
+
     elif method == 'meshgrid':
         assert input_depth == 2
         meshgrid = get_meshgrid(spatial_size)
@@ -174,15 +176,17 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
         elif freq_dict['method'] == 'random':
             meshgrid_np = get_meshgrid(spatial_size)
             meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0)
-            freqs = positional_encoding(v=meshgrid,
-                                            m=40,
-                                            sigma=10,
-                                            sample_depth=input_depth // 4,
-                                            scale_factor=4)
-            net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
+            freqs = torch.stack([positional_encoding(v=meshgrid,
+                                        m=40,
+                                        sigma=40,
+                                        # sample_depth=input_depth // 4,
+                                        sample_depth=3) for _ in range(2)], dim=0)
+            # net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
+            net_input = generate_fourier_feature_maps2(freqs, spatial_size)
         elif freq_dict['method'] == 'log':
             freqs = freq_dict['base'] ** torch.linspace(0., freq_dict['n_freqs'] - 1, steps=freq_dict['n_freqs'])
             net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
+            # net_input = generate_fourier_feature_maps2(freqs, spatial_size)
 
     elif method == 'infer_freqs':
         meshgrid_np = get_meshgrid(spatial_size)
@@ -190,10 +194,15 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
         if freq_dict['method'] == 'linear':
             net_input = torch.linspace(1, freq_dict['base'] ** (freq_dict['n_freqs'] - 1), freq_dict['n_freqs'])
         elif freq_dict['method'] == 'random':
-            net_input = positional_encoding(v=meshgrid,
-                                            m=40,
-                                            sigma=15,
-                                            sample_depth=input_depth // 4)
+            # net_input = positional_encoding(v=meshgrid,
+            #                                 m=40,
+            #                                 sigma=15,
+            #                                 sample_depth=input_depth // 4)
+            net_input = torch.stack([positional_encoding(v=meshgrid,
+                                                     m=40,
+                                                     sigma=10,
+                                                     # sample_depth=input_depth // 4,
+                                                     sample_depth=3) for _ in range(2)], dim=0)
         elif freq_dict['method'] == 'log':
             net_input = freq_dict['base'] ** torch.linspace(0., freq_dict['n_freqs'] - 1, steps=freq_dict['n_freqs'])
         elif freq_dict['method'] == 'learn2':
@@ -361,6 +370,21 @@ def generate_fourier_feature_maps(net_input, spatial_size, dtype=torch.float32, 
     return vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)
 
 
+def generate_fourier_feature_maps2(net_input, spatial_size, dtype=torch.float32):
+    meshgrid_np = get_meshgrid(spatial_size)
+    meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0).type(dtype)
+    vp = net_input * meshgrid.view(*meshgrid.shape, 1)
+    mults = []
+    for i in range(vp.shape[-2]):
+        for j in range(vp.shape[-1]):
+            mults.append((torch.cos(vp[:, :, :, i:i+1, j:j+1]) * torch.sin(vp)))
+
+    sin_cos_mul = torch.cat(mults, dim=-1)
+    vp_cat = torch.cat((torch.cos(vp), torch.sin(vp), sin_cos_mul), dim=-1)
+
+    return vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)
+
+
 def positional_encoding(m, sigma, v, sample_depth=0, scale_factor=1):
     j = torch.arange(m, device=v.device)
     if sample_depth > 0:
@@ -397,6 +421,7 @@ def np_cvt_color(img_np):
         return [img[::-1] for img in img_np]
     else:
         return img_np[::-1]
+
 
 # https://github.com/willGuimont/learnable_fourier_positional_encoding/blob/master/learnable_fourier_pos_encoding.py
 class LearnableFourierPositionalEncoding(nn.Module):
@@ -513,6 +538,7 @@ class LearnableFourierPositionalEncoding(nn.Module):
         # Step 3. Reshape to x's shape
         PEx = Y.reshape((B, *self.M, self.D)).permute(0, 3, 1, 2)
         return PEx
+
 
 # G = 2
 # M = (512, 512)

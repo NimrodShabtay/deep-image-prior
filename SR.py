@@ -47,7 +47,7 @@ show_every = 100
 # e.g. x4/zebra_GT.png for factor=4, and x8/zebra_GT.png for factor=8
 
 if args.index == -1:
-    dataset_path = 'data/sr_datasets/Set5/images'
+    dataset_path = 'data/sr_datasets/Set14/images'
     fnames_list = sorted(glob.glob(dataset_path + '/*.*'))
     fnames = fnames_list
     if args.dataset_index != -1:
@@ -118,11 +118,16 @@ for path_to_image in fnames_list:
                   skip_n33u=128,
                   skip_n11=4,
                   num_scales=5,
-                  act_fun='Gaussian',
+                  # act_fun='Gaussian',
                   upsample_mode='bilinear').type(dtype)
     # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
     # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
 
+    # projection = nn.Conv2d(160, input_depth, kernel_size=(1, 1), stride=1).type(dtype)
+    # net = nn.Sequential(
+    #     projection,
+    #     net
+    # )
     # Losses
     mse = torch.nn.MSELoss().type(dtype)
 
@@ -147,9 +152,11 @@ for path_to_image in fnames_list:
                 net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
             else:
                 net_input_ = net_input_saved
-            net_input = generate_fourier_feature_maps(net_input_, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
-                                                      dtype,
-                                                      freq_dict['cosine_only'])
+            # net_input = generate_fourier_feature_maps(net_input_, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+            #                                           dtype,
+            #                                           freq_dict['cosine_only'])
+            net_input = generate_fourier_feature_maps2(net_input_, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+                                                      dtype)
         else:
             net_input = net_input_saved
 
@@ -168,19 +175,19 @@ for path_to_image in fnames_list:
         psnr_HR = compare_psnr(imgs['HR_np'], torch_to_np(out_HR))
 
         # Backtracking
-        # if psnr_LR - psnr_LR_last < -5:
-        #     print('Falling back to previous checkpoint.')
-        #     if reduce_lr:
-        #         LR *= 0.1
-        #     for new_param, net_param in zip(last_net, net.parameters()):
-        #         net_param.data.copy_(new_param.cuda())
-        #
-        #     reduce_lr = False
-        #     return total_loss * 0
-        # else:
-        #     reduce_lr = True
-        #     last_net = [x.detach().cpu() for x in net.parameters()]
-        #     psnr_LR_last = psnr_LR
+        if psnr_LR - psnr_LR_last < -5:
+            print('Falling back to previous checkpoint.')
+            if reduce_lr:
+                LR *= 0.1
+            for new_param, net_param in zip(last_net, net.parameters()):
+                net_param.data.copy_(new_param.cuda())
+
+            reduce_lr = False
+            return total_loss * 0
+        else:
+            reduce_lr = True
+            last_net = [x.detach().cpu() for x in net.parameters()]
+            psnr_LR_last = psnr_LR
 
         # History
         psnr_history.append([psnr_LR, psnr_HR])
@@ -217,12 +224,16 @@ for path_to_image in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                            'freq_lim: {}'.format(args.freq_lim), 'sr', 'rebattle', 'gauss_act_func', 'a_learned'],
-                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_freq_lim_{}_num_freqs_{}'.format('_',
-                                                                         INPUT, LR, args.freq_lim,
-                                                                                 args.num_freqs),
-                     group='Super-Resolution - Dataset x4',
+                           'sr', 'freq_analysis'],
+                     name='{}_depth_{}_{}_init_first_no_DC'.format(filename, input_depth, '{}'.format(INPUT)),
+                     job_type='eval',
+                     group='Fourier-DIP',
+                     #        'freq_lim: {}'.format(args.freq_lim), 'sr', 'ref_reg_no_noise'],
+                     # name='{}_depth_{}_{}_K=3'.format(filename, input_depth, '{}'.format(INPUT)),
+                     # job_type='{}_{}_{}_freq_lim_{}_num_freqs_{}'.format('_',
+                     #                                                     INPUT, LR, args.freq_lim,
+                     #                                                             args.num_freqs),
+                     # group='Super-Resolution',
                      mode='online',
                      save_code=True,
                      config=log_config,
@@ -252,9 +263,11 @@ for path_to_image in fnames_list:
     p = get_params(OPT_OVER, net, net_input)
     if train_input:
         if INPUT == 'infer_freqs':
-            net_input = generate_fourier_feature_maps(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
-                                                      dtype,
-                                                      freq_dict['cosine_only'])
+            # net_input = generate_fourier_feature_maps(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+            #                                           dtype,
+            #                                           freq_dict['cosine_only'])
+            net_input = generate_fourier_feature_maps2(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+                                                      dtype)
         else:
             log_inputs(net_input)
     t = time.time()
@@ -262,9 +275,11 @@ for path_to_image in fnames_list:
     t_training = time.time() - t
 
     if INPUT == 'infer_freqs':
-        net_input = generate_fourier_feature_maps(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
-                                                  dtype,
-                                                  freq_dict['cosine_only'])
+        # net_input = generate_fourier_feature_maps(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+        #                                           dtype,
+        #                                           freq_dict['cosine_only'])
+        net_input = generate_fourier_feature_maps2(net_input_saved, (imgs['HR_pil'].size[1], imgs['HR_pil'].size[0]),
+                                                  dtype)
         if train_input:
             log_inputs(net_input)
     else:

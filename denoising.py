@@ -11,6 +11,8 @@ from utils.freq_utils import *
 from utils.common_utils import compare_psnr_y
 
 import torch.optim
+from torch.distributions.normal import Normal
+# from torch.distributions.half_normal import HalfNormal
 import matplotlib.pyplot as plt
 
 import os
@@ -146,7 +148,7 @@ for fname in fnames_list:
         #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
-        num_iter = 3000
+        num_iter = 1800
         figsize = 4
         freq_dict = {
             'method': 'log',
@@ -179,6 +181,20 @@ for fname in fnames_list:
 
     enc = LearnableFourierPositionalEncoding(2, (img_pil.size[1], img_pil.size[0]), 256, 128, input_depth, 10).type(dtype)
     net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
+
+    # Init weights first 2 convs (one for skip and one for the 1st level)
+    pip_convs = [module for module in net.modules() if isinstance(module, nn.Conv2d)]
+    # Construct a variance that decay on higher frequencies
+    var_decay_factor = 2
+    variance = torch.exp(-torch.remainder(torch.arange(0, freq_dict['n_freqs']), freq_dict['n_freqs']) / var_decay_factor)
+    # Create batch of normal distributions, each with a different value of variance corresponded to the frequency.
+    normal_dist = Normal(torch.zeros(freq_dict['n_freqs']), variance)
+
+    for i in range(2):
+        conv_shape = pip_convs[i].weight.data.shape  # OutXInXKhXKw
+        # Sample from distributions for init the conv layers weights
+        init_w = normal_dist.sample([conv_shape[0], conv_shape[1] // freq_dict['n_freqs']]).view(conv_shape).abs().type(dtype)
+        pip_convs[i].weight.data = init_w
 
     # Compute number of parameters
     s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -291,10 +307,13 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebattle'],
-                     name='{}_depth_{}_{}_{}'.format(filename, input_depth, '{}'.format(INPUT), gaussian_a),
-                     job_type='{}_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim, gaussian_a),
-                     group='Denoising',
+                           'denoising', 'freq_analysis'],
+                     name='{}_depth_{}_{}_init_first_decay_half_normal_var_decay_{}'.format(
+                         filename, input_depth, INPUT, var_decay_factor),
+                     # job_type='{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     # group='Denoising',
+                     job_type='eval',
+                     group='Fourier-DIP',
                      mode='online',
                      save_code=True,
                      config=log_config,
@@ -318,6 +337,21 @@ for fname in fnames_list:
     #         log_inputs(net_input)
     #     else:
     #         log_inputs(net_input)
+
+    fig = plt.figure()
+    plt.plot(variance.detach().cpu())
+    wandb.log({'Variance': fig})
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 3)
+    [axes[i].plot(pip_convs[0].weight[i, :, 0, 0].detach().cpu()) for i in range(3)]
+    wandb.log({'New_init': fig})
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2)
+    [axes[i].plot(pip_convs[2].weight[2, :, 0, 0].detach().cpu()) for i in range(2)]
+    wandb.log({'reg_init': fig})
+    plt.close(fig)
 
     t = time.time()
     optimize(OPTIMIZER, p, closure, LR, num_iter)

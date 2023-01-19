@@ -11,7 +11,12 @@ from utils.freq_utils import *
 from utils.common_utils import compare_psnr_y
 
 import torch.optim
+import torch.nn.functional as F
+from torch.fft import fft2, fft, fftshift, ifft
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import seaborn as sbs
+import pandas as pd
 
 import os
 import wandb
@@ -21,7 +26,7 @@ import numpy as np
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark =True
+torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 
 # Fix seeds
@@ -46,7 +51,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
 sigma = 25
-sigma_ = sigma/255.
+sigma_ = sigma / 255.
 
 if args.index == -1:
     fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
@@ -140,24 +145,15 @@ for fname in fnames_list:
         net = net.type(dtype)
 
     elif fname in fnames:
-        # img_f = rfft2(img_noisy_torch, norm='ortho')
-        # mag_img_f = torch.abs(img_f).cpu()
-        # bins = torch.Tensor([torch.Tensor([0]), *list(2 ** torch.linspace(0, args.freq_lim - 1, args.num_freqs))])
-        # hist = torch.histogram(mag_img_f, bins=bins)
-        # if hist.hist[-4:].sum() > args.freq_th:
-        #     adapt_lim = 8
-        # else:
-        #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
         num_iter = 1800
         figsize = 4
         freq_dict = {
-            'method': 'log',
+            'method': 'random',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
-            'base': 2 ** (adapt_lim / (args.num_freqs-1)),
-            # 'base': 2,
+            'base': 2 ** (adapt_lim / (args.num_freqs - 1)),
         }
 
         if INPUT == 'noise':
@@ -174,201 +170,249 @@ for fname in fnames_list:
                       num_scales=5,
                       upsample_mode='bilinear').type(dtype)
 
-        # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
-        # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+        filename = os.path.basename(fname).split('.')[0]
+        run = wandb.init(project="Fourier features DIP",
+                         entity="impliciteam",
+                         tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename,
+                               'denoising', '1D'],
+                         name='{}_depth_{}_1D'.format(filename, input_depth),
+                         job_type='eval',
+                         group='Fourier-DIP',
+                         mode='offline',
+                         save_code=True,
+                         notes='Connection between Fourier and DIP / PIP'
+                         )
+
+        wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
+        # wandb.watch(net, 'all')
+        # log_input_images(img_noisy_np, img_np)
+
+        dip_net = skip(
+            num_input_channels=input_depth,
+            num_output_channels=output_depth,
+            num_channels_up=[128] * 5,
+            num_channels_down=[128] * 5,
+            num_channels_skip=[4] * 5,
+            filter_skip_size=1,
+            filter_size_up=3,
+            filter_size_down=3,
+            upsample_mode='bilinear',
+            act_fun='LeakyReLU', need_sigmoid=True, need_bias=True, pad=pad
+        ).type(dtype)
+        dip_net.load_state_dict(torch.load('dip_unet.pth'))
+
+        pip_net = skip(
+            num_input_channels=input_depth,
+            num_output_channels=output_depth,
+            num_channels_up=[128] * 5,
+            num_channels_down=[128] * 5,
+            num_channels_skip=[4] * 5,
+            filter_skip_size=1,
+            filter_size_up=1,
+            filter_size_down=1,
+            upsample_mode='bilinear',
+            act_fun='LeakyReLU', need_sigmoid=True, need_bias=True, pad=pad
+        ).type(dtype)
+        pip_net.load_state_dict(torch.load('pip_unet.pth'))
+
+        conv_layers_dip = [module for module in dip_net.modules() if isinstance(module, nn.Conv2d)]
+        conv_layers_pip = [module for module in pip_net.modules() if isinstance(module, nn.Conv2d)]
+
+        net_input_dip = torch.load('noise_input.pt').detach().clone()
+        net_input_pip = get_input(input_depth, 'fourier',
+                                  (img_pil.size[1], img_pil.size[0]), freq_dict={
+                'method': 'log',
+                'cosine_only': False,
+                'n_freqs': args.num_freqs,
+                'base': 2 ** (adapt_lim / (args.num_freqs - 1)),
+            }).detach().clone().type(dtype)
+
+        out_dip_np = torch_to_np(dip_net(net_input_dip))
+        out_pip_np = torch_to_np(pip_net(net_input_pip))
+
+        print('DIP: {}'.format(compare_psnr(img_np, out_dip_np)))
+        print('PIP: {}'.format(compare_psnr(img_np, out_pip_np)))
+
+        dip_convs = [module for module in dip_net.modules() if isinstance(module, nn.Conv2d)]
+        pip_convs = [module for module in pip_net.modules() if isinstance(module, nn.Conv2d)]
+        net_init_convs = [module for module in net.modules() if isinstance(module, nn.Conv2d)]
+
+        pip_convs[0].weight.data
+        dip_first_conv_output = dip_convs[1](net_input_dip)
+        pip_first_conv_output = pip_convs[1](net_input_pip)
+        dip_first_conv_output_ft = fft2(dip_first_conv_output.detach().cpu(), norm='ortho').abs()
+
+        dip_first_conv_output_np = dip_first_conv_output.detach().cpu().numpy()
+        pip_first_conv_output_np = pip_first_conv_output.detach().cpu().numpy()
+
+        kernel_zero_pad = F.pad(dip_convs[1].cpu().weight, (0, 512 - 3, 0, 512 - 3))
+        kernel_2d_zero_pad_ft = fft2(kernel_zero_pad.detach(), norm='ortho').abs().cpu()
+
+        net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
+        net_input_ft = fft2(net_input.detach().cpu(), norm='ortho').abs()
+
+        init_conv_pad = F.pad(net_init_convs[1].cpu().weight, (0, 512 - 3, 0, 512 - 3))
+        init_conv_pad_ft = fft2(init_conv_pad.detach(), norm='ortho').abs().cpu()
+
+        # 1D
+        net_input_1d = get_input(input_depth, INPUT, (img_pil.size[1], 1), freq_dict=freq_dict).squeeze(-1)
+        net_input_1d_ft = fft(net_input_1d, norm='ortho').cpu()
+        net_input_1d_ft_mag = net_input_1d_ft.abs()
+
+        conv1d = nn.Conv1d(32, 1, kernel_size=3, stride=1)
+        kernel_zero_pad_ft = fft(F.pad(conv1d.weight.detach(), (0, 512 - 3)), norm='ortho').cpu()
+        kernel_zero_pad_ft_mag = kernel_zero_pad_ft.abs()
+
+        out_1d_ft = net_input_1d_ft * kernel_zero_pad_ft
+        out_1d_ft_mag = out_1d_ft.abs()
+        out_1d_spatial = ifft(out_1d_ft, norm='ortho').cpu().abs()
+
+        k = 100
+        cos_vec = torch.cos((2 * torch.pi / net_input_1d.shape[-1]) * torch.arange(net_input_1d.shape[-1]) * k)
+        res = (cos_vec * net_input_1d_ft * kernel_zero_pad_ft).abs()
+        # hist_2d, x_edges, y_edges = np.histogram2d(dip_first_conv_output_np[0, :, 5:-5, 5:-5].ravel(),
+        #                                            pip_first_conv_output_np[0, :, 5:-6, 5:-6].ravel(),
+        #                                            bins=50)
+        # # hist_2d_log = np.zeros(hist_2d.shape)
+        # # non_zeros = hist_2d != 0
+        # # hist_2d_log[non_zeros] = np.log(hist_2d[non_zeros])
+        # # plt.imshow(hist_2d_log.T, origin='lower', cmap='gray')
+        # # plt.xlabel('DIP signal bin')
+        # # plt.ylabel('PIP signal bin')
+        # # plt.colorbar()
+        # # plt.show()
+        # print(mutual_information(hist_2d))
+
     else:
         assert False
 
-    enc = LearnableFourierPositionalEncoding(2, (img_pil.size[1], img_pil.size[0]), 256, 128, input_depth, 10).type(dtype)
-
     # net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
-    # Apply random combination
-    net_input_org = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
-    weights_vec = torch.zeros(net_input_org.shape[1]).uniform_(0, 1).div(10).type(dtype)#.detach()
-    net_input = weights_vec.view(1, -1, 1, 1) * net_input_org
-
+    # Add Projection layer
+    # projection = nn.Conv2d(net_input.shape[1], input_depth, kernel_size=(1, 1), stride=1).type(dtype)
+    # net = nn.Sequential(
+    #     projection,
+    #     net
+    # )
     # Compute number of parameters
-    s = sum([np.prod(list(p.size())) for p in net.parameters()])
-    print('Number of params: %d' % s)
+    # s = sum([np.prod(list(p.size())) for p in net.parameters()])
+    # print('Number of params: %d' % s)
+    # print(net_input)
 
-    # Loss
-    mse = torch.nn.MSELoss().type(dtype)
+    observations = []
+    for _ in range(1000):
+        net_input_1d = get_input(1, INPUT, (img_pil.size[1], 1), freq_dict=freq_dict).view(1, -1)
+        net_input_1d_ft = fft(net_input_1d, norm='ortho').cpu()
+        observations.append(net_input_1d_ft.abs())
 
-    if train_input:
-        net_input_saved = net_input
-    else:
-        net_input_saved = net_input.detach().clone()
-
-    noise = torch.rand_like(net_input) if INPUT == 'infer_freqs' else net_input.detach().clone()
-
-    out_avg = None
-    last_net = None
-    psrn_noisy_last = 0
-    psnr_gt_list = []
-    i = 0
-    input_grads = {idx: [] for idx in range(net_input_saved.shape[0])}
-    t_fwd = []
-    t_bwd = []
-
-    def closure():
-        global i, out_avg, psrn_noisy_last, last_net, net_input, psnr_gt_list, t_fwd, t_bwd, weights_vec
-
-        if INPUT == 'noise':
-            if reg_noise_std > 0:
-                net_input = net_input_saved + (noise.normal_() * reg_noise_std)
-            else:
-                net_input = net_input_saved
-        elif INPUT == 'fourier':
-            if OPT_OVER.find(',') != -1:
-                net_input = weights_vec.view(1, -1, 1, 1) * net_input_org
-            else:
-                net_input = net_input_saved
-        elif INPUT == 'infer_freqs':
-            if reg_noise_std > 0:
-                net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
-            else:
-                net_input_ = net_input_saved
-
-            if freq_dict['method'] == 'learn2':
-                net_input = enc(net_input_)
-            else:
-                net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
-        else:
-            net_input = net_input_saved
-
-        t_s = time.time()
-        out = net(net_input)
-        t_fwd.append(time.time() - t_s)
-        # Smoothing
-        if out_avg is None:
-            out_avg = out.detach()
-        else:
-            out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
-
-        total_loss = mse(out, img_noisy_torch)
-        # total_loss = mse(out, img_noisy_norm_torch_dct)
-        t_s = time.time()
-        total_loss.backward()
-        t_bwd.append(time.time() - t_s)
-
-        # out_np = idct_2d(out, norm='ortho').detach().cpu().numpy()[0]
-        out_np = out.detach().cpu().numpy()[0]
-        # psrn_noisy = compare_psnr(img_noisy_norm_np, out_np)
-        # psrn_gt = compare_psnr(img_norm_np, out_np)
-        # psrn_gt_sm = compare_psnr(img_norm_np, out_avg.detach().cpu().numpy()[0])
-        psrn_noisy = compare_psnr(img_noisy_np, out_np)
-        psrn_gt = compare_psnr(img_np, out_np)
-        psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0])
-
-        if PLOT and i % show_every == 0:
-            print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
-                i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
-            psnr_gt_list.append(psrn_gt)
-            # wandb.log({'Fitting (DCT)': wandb.Image(np.clip(np.transpose(out.detach().cpu().numpy()[0],
-            #                                                              (1, 2, 0)), 0, 1),
-            #                                         caption='step {}'.format(i))}, commit=False)
-            wandb.log({'Fitting (Img)': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
-                                                    caption='step {}'.format(i))}, commit=False)
-            # visualize_fourier(out[0].detach().cpu(), iter=i)
-            wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
-        # Backtracking
-        # if i % show_every:
-        #     if psrn_noisy - psrn_noisy_last < -2:
-        #         print('Falling back to previous checkpoint.')
-        #
-        #         for new_param, net_param in zip(last_net, net.parameters()):
-        #             net_param.data.copy_(new_param.cuda())
-        #
-        #         return total_loss * 0
-        #     else:
-        #         last_net = [x.detach().cpu() for x in net.parameters()]
-        #         psrn_noisy_last = psrn_noisy
-
-        i += 1
-
-        # Log metrics
-        if INPUT == 'infer_freqs':
-            visualize_learned_frequencies(net_input_saved)
-
-        wandb.log({'training loss': total_loss.item()}, commit=True)
-        return total_loss
-
-    log_config = {
-        "learning_rate": LR,
-        "epochs": num_iter,
-        'optimizer': OPTIMIZER,
-        'loss': type(mse).__name__,
-        'input depth': input_depth,
-        'input type': INPUT,
-        'Train input': train_input,
-        'Reg. Noise STD': reg_noise_std,
-    }
-    log_config.update(**freq_dict)
-    filename = os.path.basename(fname).split('.')[0]
-    run = wandb.init(project="Fourier features DIP",
-                     entity="impliciteam",
-                     tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'random_combination'],
-                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, args.freq_lim),
-                     group='Denoising',
-                     mode='online',
-                     save_code=True,
-                     config=log_config,
-                     notes='Connection between Fourier and DIP / PIP'
-                     )
-
-    wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
-    # wandb.watch(net, 'all')
-    log_input_images(img_noisy_np, img_np)
-    # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
-    print('Number of params: %d' % s)
-    print(net)
-    p = get_params(OPT_OVER, net, weights_vec, input_encoder=enc)
-    # p = get_params(OPT_OVER, net, net_input, input_encoder=enc)
-    # if train_input:
-    #     if INPUT == 'infer_freqs':
-    #         if freq_dict['method'] == 'learn2':
-    #             net_input = enc(net_input_saved)
-    #         else:
-    #             net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
-    #                                                       only_cosine=freq_dict['cosine_only'])
-    #         log_inputs(net_input)
-    #     else:
-    #         log_inputs(net_input)
-
-    t = time.time()
-    optimize(OPTIMIZER, p, closure, LR, num_iter)
-    t_training = time.time() - t
-    training_times.append(t_training)
-    print('Training time: {}'.format(t_training))
-    # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
-    #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
-
-    if INPUT == 'infer_freqs':
-        if freq_dict['method'] == 'learn2':
-            net_input = enc(net_input_saved)
-        else:
-            net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
-                                                      only_cosine=freq_dict['cosine_only'])
-        if train_input:
-            log_inputs(net_input)
-    else:
-        net_input = net_input_saved
-
-    out_np = torch_to_np(net(weights_vec.view(1, -1, 1, 1) * net_input_org))
-    print('avg. training time - {}'.format(np.mean(training_times)))
-    log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
-    wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
-    wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
-    # wandb.log({'training_time': t_training}, commit=False)
-    if args.index == -2:
-        print(compare_psnr(out_np, img_np))
-        img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
-        img_final_pil.save(os.path.join(save_dir, filename + '.png'))
-
-    q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
-    plt.plot(psnr_gt_list)
-    plt.title('max: {}\nlast: {}'.format(max(psnr_gt_list), psnr_gt_list[-1]))
+    observations_tensor = torch.cat(observations, dim=0)
+    std, mean = torch.std_mean(observations_tensor, unbiased=False)
+    jump_val = 8
+    indices_vec = torch.arange(0, observations_tensor.shape[1], jump_val)
+    observations_tensor_every_n = observations_tensor[:, indices_vec]
+    df = pd.DataFrame(observations_tensor_every_n.cpu().numpy(), columns=[str(i.item()) for i in indices_vec])
+    fig = plt.figure(figsize=(30, 5))
+    sbs.violinplot(data=df)
+    plt.xlabel('Frequency')
+    plt.ylabel('Magnitude')
     plt.show()
-    run.finish()
+
+    # tables = []
+    # for k in range(20):
+    #     i = np.random.choice(range(init_conv_pad_ft.shape[0]), 1, replace=False)[0]
+    #     j = np.random.choice(range(init_conv_pad_ft.shape[1]), 1, replace=False)[0]
+    #
+    #     curr_random_init_kernel = init_conv_pad_ft[i, j].cpu()
+    #     curr_learned_kernel = kernel_2d_zero_pad_ft[i, j].cpu()
+    #
+    #     fig, axes = plt.subplots(1, 2)
+    #     im1 = axes[0].imshow(curr_random_init_kernel)
+    #     axes[0].axis('off')
+    #     divider = make_axes_locatable(axes[0])
+    #     cax = divider.append_axes('right', size='5%', pad=0.05)
+    #     fig.colorbar(im1, cax=cax, orientation='vertical')
+    #     axes[0].set_title('Randon - Init ({}, {})'.format(i, j))
+    #     im2 = axes[1].imshow(curr_learned_kernel)
+    #     axes[1].axis('off')
+    #     divider = make_axes_locatable(axes[1])
+    #     cax = divider.append_axes('right', size='5%', pad=0.05)
+    #     fig.colorbar(im2, cax=cax, orientation='vertical')
+    #     axes[1].set_title('Learned ({}, {})'.format(i, j))
+    #
+    #     wandb.log({'Kernel': fig})
+    #     plt.close(fig)
+    #
+    #
+    # #
+    # # commit = False
+    # # for k in range(dip_first_conv_output_ft.shape[1]):
+    # #     if k == dip_first_conv_output_ft.shape[1] - 1:
+    # #         commit = True
+    # #
+    # #     fig1 = plt.figure()
+    # #     plt.imshow(dip_first_conv_output_ft[0, k].cpu())
+    # #     plt.colorbar()
+    # #     plt.title('plane #{}'.format(k))
+    # #     plt.axis('off')
+    # #     wandb.log({"|FT(out-l1)|": fig1})
+    # #     plt.close(fig1)
+    # # 1D example
+    # tables = []
+    # keys = []
+    # for i in range(net_input_1d_ft_mag.shape[1]):
+    #     data_y = [y.item() for y in net_input_1d_ft_mag[0, i]]
+    #     tables.append(data_y)
+    #     keys.append(str(i))
+    #
+    # wandb.log({"|FT(Input)|": wandb.plot.line_series(
+    #     xs=np.arange(0, net_input_1d_ft_mag.shape[-1]),
+    #     ys=tables,
+    #     keys=keys,
+    #     title="|FT(Input)|",
+    #     xname="samples")})
+    #
+    #
+    # tables = []
+    # keys = []
+    # for i in range(kernel_zero_pad_ft_mag.shape[1]):
+    #     data = [[x, y.item()] for (x, y) in zip(np.arange(0, net_input_1d_ft_mag.shape[-1]), net_input_1d_ft_mag[0, i])]
+    #     # data_y = [y.item() for y in kernel_zero_pad_ft_mag[0, i]]
+    #     # tables.append(data_y)
+    #     # keys.append(str(i))
+    #     tables.append(wandb.Table(data=data, columns=["x", "y"]))
+    #     wandb.log({"|FT(Input)| - {}".format(i): wandb.plot.line(tables[-1], "x", "y".format(i),
+    #                title="|FT(Input)| #{}".format(i))})
+    #
+    # # wandb.log({"|FT(kernel(zero-pd))|": wandb.plot.line_series(
+    # #     xs=np.arange(0, kernel_zero_pad_ft_mag.shape[-1]),
+    # #     ys=tables,
+    # #     keys=keys,
+    # #     title="|FT(kernel(zero-pd))|",
+    # #     xname="samples")})
+    # tables = []
+    # for i in range(kernel_zero_pad_ft_mag.shape[1]):
+    #     data = [[x, y.item()] for (x, y) in zip(np.arange(0, kernel_zero_pad_ft_mag.shape[-1]),
+    #                                             kernel_zero_pad_ft_mag[0, i])]
+    #     tables.append(wandb.Table(data=data, columns=["x", "y"]))
+    #     wandb.log({"|FT(Kernel)| - {}".format(i): wandb.plot.line(tables[-1], "x", "y".format(i),
+    #                title="|FT(Kernel)| Channel #{}".format(i))})
+    #
+    # tables = []
+    # for i in range(out_1d_ft_mag.shape[1]):
+    #     data = [[x, y.item()] for (x, y) in zip(np.arange(0, out_1d_ft_mag.shape[-1]), out_1d_ft_mag[0, i])]
+    #     tables.append(wandb.Table(data=data, columns=["x", "y"]))
+    #     wandb.log({"|FT(Out)| - {}".format(i): wandb.plot.line(tables[-1], "x", "y".format(i),
+    #                title="|FT(Out)| Channel #{}".format(i))})
+    #
+    # tables = []
+    # for i in range(out_1d_spatial.shape[1]):
+    #     data = [[x, y.item()] for (x, y) in zip(np.arange(0, out_1d_spatial.shape[-1]), out_1d_spatial[0, i])]
+    #     tables.append(wandb.Table(data=data, columns=["x", "y"]))
+    #     wandb.log({"|Out| - {}".format(i): wandb.plot.line(tables[-1], "x", "y".format(i),
+    #                                                        title="|Out Channel #{}".format(i))})
+    #
+    # tables = []
+    # for i in range(res.shape[1]):
+    #     data = [[x, y.item()] for (x, y) in zip(np.arange(0, res.shape[-1]), res[0, i])]
+    #     tables.append(wandb.Table(data=data, columns=["x", "y"]))
+    #     wandb.log({"|Out - {}| - {}".format(k, i): wandb.plot.line(tables[-1], "x", "y".format(i),
+    #                                                        title="|Out ({} row) Channel #{}|".format(k, i))})

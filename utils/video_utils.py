@@ -64,16 +64,16 @@ def load_image(cap, resize=None):
 
 
 def select_frames(input_seq, factor=1):
-    #Assuming B, C, H, W
+    # Assuming B, C, H, W
     indices = [i for i in range(0, input_seq.shape[0], factor)]
     values = torch.index_select(input_seq, 0,
-                              torch.tensor(indices, dtype=torch.int32,
-                                           device=input_seq.device))
+                                torch.tensor(indices, dtype=torch.int32,
+                                             device=input_seq.device))
     return indices, values
 
 
 class VideoDataset:
-    def __init__(self, video_path, input_type, task, crop_shape=None, sigma=25, mode='random', temp_stride=1,
+    def __init__(self, video_path, input_type, task, type, crop_shape=None, sigma=25, mode='random', temp_stride=1,
                  num_freqs=8, batch_size=8, arch_mode='2d', train=True, spatial_factor=4):
         self.sigma = sigma / 255
         self.mode = mode
@@ -81,6 +81,9 @@ class VideoDataset:
         self.n_frames = int(cap_video.get(cv2.CAP_PROP_FRAME_COUNT))
         self.org_width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.org_height = int(cap_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.arch_mode = arch_mode
+        self.batch_size = batch_size
+        self.temporal_stride = temp_stride
         self.task = task
         self.downsampler = DownsamplingSequence(factor=spatial_factor) if task == 'spatial_sr' else None
         self.images = []
@@ -93,22 +96,22 @@ class VideoDataset:
             elif task == 'temporal_sr':
                 self.degraded_images.append(np_to_torch(frame))
             elif task == 'spatial_sr':
-                self.degraded_images.append(np_to_torch(self.downsampler.downsmaple_sequence(np.expand_dims(frame, axis=0))[0]))
+                self.degraded_images.append(
+                    np_to_torch(self.downsampler.downsmaple_sequence(np.expand_dims(frame, axis=0))[0]))
 
         cap_video.release()
         self.images = torch.cat(self.images)
         self.degraded_images = torch.cat(self.degraded_images)
+        # if task == 'temporal_sr':
+        #     # self.create_motion_blur_video()
         if crop_shape is None:
             crop_shape = self.images[0].shape[-2:]
         self.crop_height = crop_shape[0]
         self.crop_width = crop_shape[1]
         self.batch_list = None
         self.n_batches = 0
-        self.arch_mode = arch_mode
-        self.temporal_stride = temp_stride
-        self.batch_size = batch_size
         self.input = None
-        self.device = 'cuda'
+        self.type = type
         self.train = train
         self.input_type = input_type
         self.sampled_indices = None
@@ -118,7 +121,12 @@ class VideoDataset:
             'n_freqs': num_freqs,
             'base': 2 ** (8 / (num_freqs - 1)),
         }
-        self.input_depth = 32 if input_type == 'noise' else num_freqs * 4
+        if input_type == 'noise':
+            self.spatial_input_depth = 32
+        elif input_type == 'meshgrid':
+            self.spatial_input_depth = 2
+        else:
+            self.spatial_input_depth = num_freqs * 4
 
         self.init_batch_list()
         self.init_input()
@@ -128,7 +136,6 @@ class VideoDataset:
                 self.sampled_indices, self.degraded_images_vis = select_frames(self.degraded_images, factor=2)
             else:
                 self.sampled_indices = np.arange(0, self.n_frames)
-            # self.n_frames = self.images.shape[0]
 
     def get_cropped_video_dims(self):
         return self.crop_height, self.crop_width
@@ -149,6 +156,10 @@ class VideoDataset:
         self.n_batches = len(self.batch_list)
         if self.mode == 'random':
             random.shuffle(self.batch_list)
+
+    def create_motion_blur_video(self):
+        self.degraded_images = torch.stack([self.images[idx:idx + self.temporal_stride].mean(dim=0) for idx in
+                                            range(0, self.images.shape[0], self.temporal_stride)], dim=0)
 
     def sample_next_batch(self):
         batch_data = {}
@@ -198,7 +209,7 @@ class VideoDataset:
         for i, fid in enumerate(cur_batch):
             input_batch.append(self.input[fid].unsqueeze(0))
             gt_batch.append(self.images[fid].unsqueeze(0))
-            img_degraded_batch.append(self.degraded_images[fid].unsqueeze(0))
+            img_degraded_batch.append(self.images[fid].unsqueeze(0))
 
         batch_data['cur_batch'] = cur_batch
         batch_data['batch_idx'] = batch_idx
@@ -206,23 +217,36 @@ class VideoDataset:
         batch_data['input_batch'] = torch.cat(input_batch)
         batch_data['img_degraded_batch'] = torch.cat(img_degraded_batch)
         batch_data['gt_batch'] = torch.cat(gt_batch)
+        if self.task == 'temporal_sr':
+            batch_data['temp_stride'] = self.temporal_stride
+
         return batch_data
 
     def add_sequence_positional_encoding(self):
-        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-7,
+
+        if self.input_type in ['fourier', 'infer_freqs']:
+            freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs'] - 6,
                                                          steps=self.freq_dict['n_freqs'])
-        # freqs = torch.Tensor([1])
+            freq_feat_dim = self.freq_dict['n_freqs']
+        elif self.input_type == 'meshgrid':
+            freqs = torch.tensor([1])
+            freq_feat_dim = 1
+        else:
+            raise ValueError
+
         if self.input_type == 'infer_freqs':
             self.input = torch.cat([self.input, freqs], dim=0)
         else:
             spatial_size = self.input.shape[-2:]
             vp = freqs.unsqueeze(1).repeat(1, self.n_frames) * torch.arange(1,
                                                                             self.n_frames + 1) / self.n_frames  # FF X frames
-            vp = vp.T.view(self.n_frames, self.freq_dict['n_freqs'], 1, 1).repeat(1, 1, *spatial_size)
+            vp = vp.T.view(self.n_frames, freq_feat_dim, 1, 1).repeat(1, 1, *spatial_size)
             # vp = vp.T.view(self.n_frames, 1, 1, 1).repeat(1, 1, *spatial_size)
-            time_pe = torch.cat((torch.cos(vp), torch.sin(vp)), dim=1)
+            if self.input_type != 'meshgrid':
+                time_pe = torch.cat((torch.cos(vp), torch.sin(vp)), dim=1)
+            else:
+                time_pe = vp
             self.input = torch.cat([self.input, time_pe], dim=1)
-            # self.input = torch.cat([self.input, vp], dim=1)
 
     def init_input(self):
         if self.input_type == 'infer_freqs':
@@ -230,7 +254,7 @@ class VideoDataset:
                                                                   self.freq_dict['n_freqs'] - 1,
                                                                   steps=self.freq_dict['n_freqs'])
         else:
-            self.input = get_input(self.input_depth, self.input_type, (self.crop_height, self.crop_width),
+            self.input = get_input(self.spatial_input_depth, self.input_type, (self.crop_height, self.crop_width),
                                    freq_dict=self.freq_dict).repeat(self.n_frames, 1, 1, 1)
         if self.input_type != 'noise':
             self.add_sequence_positional_encoding()
@@ -252,7 +276,7 @@ class VideoDataset:
             left = np.random.randint(0, W - Cw, B)
         cropped_inp, cropped_gt = [], []
         for i in range(B):
-            cropped_inp.append(inp[i, :, top[i]:top[i]+Ch, left[i]:left[i]+Cw])
+            cropped_inp.append(inp[i, :, top[i]:top[i] + Ch, left[i]:left[i] + Cw])
         for i in range(Bgt):
             cropped_gt.append(gt[i, :, top[i]:top[i] + Ch, left[i]:left[i] + Cw])
 
@@ -263,8 +287,8 @@ class VideoDataset:
             batch_data['input_batch'], batch_data['img_degraded_batch'] = self.generate_random_crops(
                 batch_data['input_batch'], batch_data['img_degraded_batch'])
 
-        batch_data['input_batch'] = batch_data['input_batch'].to(self.device)
-        batch_data['img_degraded_batch'] = batch_data['img_degraded_batch'].to(self.device)
+        batch_data['input_batch'] = batch_data['input_batch'].type(self.type)
+        batch_data['img_degraded_batch'] = batch_data['img_degraded_batch'].type(self.type)
 
         if self.arch_mode == '3d':
             batch_data['input_batch'] = batch_data['input_batch'].transpose(0, 1).unsqueeze(0)
@@ -283,10 +307,9 @@ class VideoDataset:
         return ret_val
 
     def get_all_degraded(self, numpy=False):
-        if self.task == 'temporal_sr':
-            degs_imgs = self.degraded_images_vis
-        else:
-            degs_imgs = self.degraded_images
+        degs_imgs = self.degraded_images
+        if self.temporal_stride > 1:
+            degs_imgs = degs_imgs[::self.temporal_stride]
         if numpy:
             ret_val = degs_imgs.detach().cpu().numpy()
         else:

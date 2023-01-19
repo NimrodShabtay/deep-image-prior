@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import random
 
-from models import skip, MLP
+from models import skip, MLP, skip_temporal, SirenConv
 from models.skip_3d import skip_3d
 from utils.denoising_utils import *
 from utils.wandb_utils import *
@@ -47,6 +47,7 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            input_type=INPUT,
                            num_freqs=args.num_freqs,
                            task='temporal_sr',
+                           type=dtype,
                            crop_shape=None,
                            batch_size=6,
                            temp_stride=temporal_factor,
@@ -59,6 +60,7 @@ vid_dataset_eval = VideoDataset(args.input_vid_path,
                                 input_type=INPUT,
                                 num_freqs=args.num_freqs,
                                 task='temporal_sr',
+                                type=dtype,
                                 crop_shape=None,
                                 batch_size=6,
                                 temp_stride=1,
@@ -84,7 +86,7 @@ num_iter = 1
 figsize = 4
 
 if INPUT == 'noise':
-    input_depth = vid_dataset.input_depth
+    input_depth = vid_dataset.spatial_input_depth
     net = skip_3d(input_depth, 3,
                   num_channels_down=[16, 32, 64, 128, 128, 128],
                   num_channels_up=[16, 32, 64, 128, 128, 128],
@@ -97,20 +99,26 @@ if INPUT == 'noise':
                   act_fun='LeakyReLU').type(dtype)
 else:
     input_depth = args.num_freqs * 6  # 4 * F for spatial encoding, 2 * F for temporal encoding
-    # input_depth = args.num_freqs * 4 + 1  # 4 * F for spatial encoding,
-    # net = skip(input_depth, 3,
-    #            num_channels_down=[256, 256, 256, 256, 256, 256],
-    #            num_channels_up=[256, 256, 256, 256, 256, 256],
-    #            num_channels_skip=[8, 8, 8, 8, 8, 8],
-    #            filter_size_up=1,
-    #            filter_size_down=1,
-    #            filter_skip_size=1,
-    #            upsample_mode='bilinear',
-    #            downsample_mode='stride',
-    #            need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
-    #            act_fun='LeakyReLU').type(dtype)
+    # input_depth = 3  # X, Y, T
+    net = skip_temporal(input_depth, 3,
+               num_channels_down=[256, 256, 256, 256, 512, 512, 512],
+               num_channels_up=[256, 256, 256, 256, 512, 512, 512],
+               num_channels_skip=[8, 8, 8, 8, 16, 16, 16],
+               # num_channels_down=[128, 256],
+               # num_channels_up=[128, 256],
+               # num_channels_skip=[4, 8],
+               filter_size_up=1,
+               filter_size_down=1,
+               filter_skip_size=1,
+               upsample_mode='bilinear',
+               downsample_mode='stride',
+               need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
+               act_fun='LeakyReLU', gaussian_a=5).type(dtype)
 
-    net = MLP(input_depth, 3, [256 for _ in range(12)]).type(dtype)
+    # net = SirenConv(input_depth,
+    #                 hidden_features=128, hidden_layers=3, out_features=3, outermost_linear=True).type(dtype)
+
+    # net = MLP(input_depth, 3, [256 for _ in range(12)]).type(dtype)
 
 # Compute number of parameters
 s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -168,6 +176,8 @@ def eval_video(val_dataset, model, epoch):
         'optimizer_state_dict': optimizer.state_dict(),
     }, 'temporal_sr_checkpoint_{}.pth'.format(epoch))
 
+    return psnr_whole_video
+
 
 def train_batch(batch_data):
     global j
@@ -179,7 +189,8 @@ def train_batch(batch_data):
             net_input = net_input_saved + (noise.normal_() * reg_noise_std)
         else:
             net_input = net_input_saved
-    elif INPUT == 'fourier':
+    # elif INPUT == 'fourier':
+    else:
         net_input = net_input_saved
 
     net_out = net(net_input)
@@ -214,10 +225,11 @@ filename = os.path.basename(args.input_vid_path).split('.')[0]
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
-                       'PIP'],
-                 name='MLP_{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
+                       'PIP', 'TE levels 1-7'],
+                 name='{}_depth_{}_{}_{}_spatial_factor_{}_temp_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
-                 job_type='sequential_{}_{}'.format(INPUT, LR),
+                 job_type='{}_{}_double_lowest_half_capacity_7_levels'.format(INPUT, LR),
+                 # job_type='SIREN_3_128_{}_{}'.format(INPUT, LR),
                  group='Video - Temporal SR',
                  mode='online',
                  save_code=True,
@@ -235,6 +247,8 @@ n_batches = vid_dataset.n_batches
 # ckpt = torch.load('/mnt5/nimrod/deep-image-prior/temporal_sr_checkpoint_2000.pth')
 # net.load_state_dict(ckpt['model_state_dict'])
 eval_video(vid_dataset_eval, net, 0)
+lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max')
+
 for epoch in tqdm.tqdm(range(n_epochs), desc='Epoch'):
     batch_cnt = 0
     running_psnr = 0.
@@ -257,7 +271,9 @@ for epoch in tqdm.tqdm(range(n_epochs), desc='Epoch'):
 
     # Infer video:
     if epoch % show_every == 0:
-        eval_video(vid_dataset_eval, net, epoch)
+        val_psnr = eval_video(vid_dataset_eval, net, epoch)
+        lr_scheduler.step(val_psnr)
+
 
 # Infer video at the end:
-eval_video(vid_dataset_eval, net, epoch)
+val_psnr = eval_video(vid_dataset_eval, net, epoch)

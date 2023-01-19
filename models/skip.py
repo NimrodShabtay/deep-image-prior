@@ -74,6 +74,7 @@ def skip(
         if i == len(num_channels_down) - 1:
             # The deepest
             k = num_channels_down[i]
+
         else:
             deeper.add(deeper_main)
             k = num_channels_up[i + 1]
@@ -83,7 +84,6 @@ def skip(
         model_tmp.add(conv(num_channels_skip[i] + k, num_channels_up[i], filter_size_up[i], 1, bias=need_bias, pad=pad))
         model_tmp.add(bn(num_channels_up[i]))
         model_tmp.add(act(act_fun, a=gaussian_a))
-
 
         if need1x1_up:
             model_tmp.add(conv(num_channels_up[i], num_channels_up[i], 1, bias=need_bias, pad=pad))

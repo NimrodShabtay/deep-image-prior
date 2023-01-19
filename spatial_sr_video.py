@@ -134,7 +134,7 @@ num_iter = 1
 figsize = 4
 
 if INPUT == 'noise':
-    input_depth = vid_dataset.input_depth
+    input_depth = vid_dataset.spatial_input_depth
     net = skip_3d(input_depth, 3,
                   num_channels_down=[16, 32, 64, 128, 128, 128],
                   num_channels_up=[16, 32, 64, 128, 128, 128],
