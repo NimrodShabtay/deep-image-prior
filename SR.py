@@ -47,7 +47,7 @@ show_every = 100
 # e.g. x4/zebra_GT.png for factor=4, and x8/zebra_GT.png for factor=8
 
 if args.index == -1:
-    dataset_path = 'data/sr_datasets/Set14/images'
+    dataset_path = 'data/sr_datasets/Set5/images'
     fnames_list = sorted(glob.glob(dataset_path + '/*.*'))
     fnames = fnames_list
     if args.dataset_index != -1:
@@ -226,7 +226,7 @@ for path_to_image in fnames_list:
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
                            'sr', 'freq_analysis'],
                      name='{}_depth_{}_{}_init_first_no_DC'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='eval',
+                     job_type='temp',
                      group='Fourier-DIP',
                      #        'freq_lim: {}'.format(args.freq_lim), 'sr', 'ref_reg_no_noise'],
                      # name='{}_depth_{}_{}_K=3'.format(filename, input_depth, '{}'.format(INPUT)),

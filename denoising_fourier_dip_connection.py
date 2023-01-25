@@ -238,6 +238,15 @@ for fname in fnames_list:
         net_init_convs = [module for module in net.modules() if isinstance(module, nn.Conv2d)]
 
         pip_convs[0].weight.data
+        # Visualize pip convs
+        for layer_n in range(2):
+            for p in range(pip_convs[layer_n].weight.data.shape[0]):
+                fig = plt.figure()
+                plt.plot(pip_convs[1].weight.data[p, :, 0, 0].detach().cpu())
+                [plt.axvline(i, ymin=-1, ymax=1) for i in range(0, 31, 8)]
+                plt.savefig('pip_conv_{}_{}.png'.format(layer_n, p))
+                plt.close(fig)
+
         dip_first_conv_output = dip_convs[1](net_input_dip)
         pip_first_conv_output = pip_convs[1](net_input_pip)
         dip_first_conv_output_ft = fft2(dip_first_conv_output.detach().cpu(), norm='ortho').abs()
