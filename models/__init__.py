@@ -7,6 +7,7 @@ import torch.nn as nn
 from .mlp import MLP
 from .simple_fcn import FCN
 from .relu_net import ReLUNet
+from .siren import SirenConv
 
 
 def get_net(input_depth, NET_TYPE, pad, upsample_mode, n_channels=3, act_fun='LeakyReLU', skip_n33d=128, skip_n33u=128, skip_n11=4, num_scales=5, downsample_mode='stride', gaussian_a=None):
@@ -19,7 +20,7 @@ def get_net(input_depth, NET_TYPE, pad, upsample_mode, n_channels=3, act_fun='Le
                                             num_channels_skip = [skip_n11]*num_scales if isinstance(skip_n11, int) else skip_n11, 
                                             upsample_mode=upsample_mode, downsample_mode=downsample_mode,
                                             need_sigmoid=True, need_bias=True, pad=pad, act_fun=act_fun,
-                   filter_size_down=1, filter_size_up=1, filter_skip_size=1, gaussian_a=gaussian_a)
+                   filter_size_down=3, filter_size_up=3, filter_skip_size=1, gaussian_a=gaussian_a)
     elif NET_TYPE == 'texture_nets':
         net = get_texture_nets(inp=input_depth, ratios = [32, 16, 8, 4, 2, 1], fill_noise=False,pad=pad)
 
