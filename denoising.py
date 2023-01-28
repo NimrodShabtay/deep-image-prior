@@ -57,13 +57,13 @@ if args.index == -1:
     if args.dataset_index != -1:
         fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
 elif args.index == -2:
-    base_path = './data/videos/bike_picking_20_frames'
-    save_dir = 'plots/{}/denoising'.format(base_path.split('/')[-1])
+    base_path = './data/videos/rollerblade'
+    save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
     # fnames = sorted(glob.glob('./data/videos/rollerblade/*.png'))
     # fnames = sorted(glob.glob('./data/videos/blackswan/*.png'))
     # fnames = sorted(glob.glob('./data/videos/judo/*.jpg'))
-    fnames = sorted(glob.glob(base_path + '/*.jpg'))
+    fnames = sorted(glob.glob(base_path + '/*.png'))
     # fnames = sorted(glob.glob('./data/videos/tennis/*.png'))
     fnames_list = fnames
     # fnames_list = np.random.choice(fnames, 8, replace=False)
@@ -282,10 +282,10 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebuttle', 'poisson'],
+                           'denoising', 'rebuttle'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='bike_picking_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
-                     group='Rebuttle - DIP video denoising',
+                     job_type='rollerblade_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     group='Rebuttle - PIP video denoising (fbf)',
                      mode='online',
                      save_code=True,
                      config=log_config,
