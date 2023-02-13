@@ -113,17 +113,18 @@ for path_to_image in fnames_list:
     print('Input is {}, Depth = {}'.format(INPUT, input_depth))
 
     NET_TYPE = 'skip'  # UNet, ResNet
-    # net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-    #               skip_n33d=128,
-    #               skip_n33u=128,
-    #               skip_n11=4,
-    #               num_scales=5,
-    #               # act_fun='Gaussian',
-    #               upsample_mode='bilinear').type(dtype)
+    net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                  skip_n33d=128,
+                  skip_n33u=128,
+                  skip_n11=4,
+                  num_scales=5,
+                  # act_fun='Gaussian',
+                  upsample_mode='bilinear').type(dtype)
     # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
     # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-    net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
-                    outermost_linear=True).type(dtype)
+    # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+    #                 outermost_linear=True).type(dtype)
+
     # Losses
     mse = torch.nn.MSELoss().type(dtype)
 
