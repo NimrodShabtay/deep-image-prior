@@ -459,64 +459,6 @@ def main():
         print(name)
         print('-' * 20)
         chosen_video = dataset[name]
-        vid_gt = VideoDataset(chosen_video['gt'],
-                              input_type='noise',
-                              num_freqs=8,
-                              task='denoising',
-                              crop_shape=None,
-                              batch_size=4,
-                              arch_mode='3d',
-                              mode='cont')
-
-        # vid_pip = VideoDataset(chosen_video[task]['pip'],
-        #                             input_type='noise',
-        #                             num_freqs=8,
-        #                             task='denoising',
-        #                             crop_shape=None,
-        #                             batch_size=4,
-        #                             arch_mode='2d',
-        #                             mode='cont')
-
-        vid_dip = VideoDataset(chosen_video[task]['dip'],
-                               input_type='noise',
-                               num_freqs=8,
-                               task='denoising',
-                               crop_shape=None,
-                               batch_size=4,
-                               arch_mode='2d',
-                               mode='cont')
-
-        vid_3d_dip = VideoDataset(chosen_video[task]['3d-dip'],
-                                  input_type='noise',
-                                  num_freqs=8,
-                                  task='denoising',
-                                  crop_shape=None,
-                                  batch_size=4,
-                                  arch_mode='2d',
-                                  mode='cont')
-
-        gt = vid_gt.get_all_gt().cuda()
-        # pip = vid_pip.get_all_gt().cuda()
-        dip = vid_dip.get_all_gt().cuda()
-        dip_3d = vid_3d_dip.get_all_gt().cuda()
-        # gt_files = sorted(glob.glob('./data/videos/dog/*.jpg'))
-        # gt = np.zeros((len(gt_files), 448, 832, 3))
-        # for i in range(len(gt_files)):
-        #     gt[i] = crop_image(Image.open(gt_files[i]), d=64)
-        #     gt[i] /= 255.0
-        #
-        # dip_files = sorted(glob.glob('./plots/dog/sr/*.png'))
-        # dip = np.zeros((len(dip_files), 448, 832, 3))
-        # for i in range(len(dip_files)):
-        #     dip[i] = Image.open(dip_files[i]).convert('RGB')
-        #     dip[i] /= 255.0
-        #
-        # pip_files = sorted(glob.glob('./data/eval_vid/spatial_sr/pip/dog/*.png'))
-        # pip = np.zeros((len(pip_files), 448, 832, 3))
-        # for i in range(len(pip_files)):
-        #     pip[i] = Image.open(pip_files[i]).convert('RGB')
-        #     pip[i] /= 255.0
-        # remove edges  | rollerblade: 5 | dog: 1 | Blackswan: 2 | Judo: 4
         remove_edges_start_index = chosen_video['ignore_index']
         if 0 <= remove_edges_start_index < 2:
             remove_edges_start_index = 2
@@ -529,6 +471,10 @@ def main():
         dip_ref = []
         gt_ref = []
         pip_ref = []
+        pip_binary_ref = []
+        dip_binary_ref = []
+        dip_3d_ref = []
+        d = 64
 
         for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising/*.png'.format(name))):
             dip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
@@ -548,27 +494,26 @@ def main():
         pip_ref = torch.from_numpy(np.stack(pip_ref)).cuda()
         pip_ref = pip_ref[2:-(remove_edges_start_index)]
 
+        for img_path in sorted(glob.glob('./data/eval_vid/denoised_videos/3d_dip/gauss_25/{}/*.*'.format(name))):
+            dip_3d_ref.append(
+                np.array(crop_image(Image.open(img_path), d=d)).transpose(2, 0, 1).astype(np.float32) / 255)
+
+        dip_3d_ref = torch.from_numpy(np.stack(dip_3d_ref)).cuda()
+        dip_3d_ref = dip_3d_ref[2:-remove_edges_start_index]
+
         ssim_loss = SSIM3D(window_size=11)
         print('3D-SSIM')
-
-        # print('pip: {:.4f}'.format(ssim_loss(gt.permute(1, 0, 2, 3).unsqueeze(0),
-        #                                         pip.permute(1, 0, 2, 3).unsqueeze(0))))
-
-        print('dip: {:.4f}'.format(ssim_loss(gt.permute(1, 0, 2, 3).unsqueeze(0),
-                                             dip.permute(1, 0, 2, 3).unsqueeze(0))))
         print('dip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
                                                       dip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
         print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
                                                       pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-        print('3d-dip: {:.4f}'.format(ssim_loss(gt.permute(1, 0, 2, 3).unsqueeze(0),
-                                                dip_3d.permute(1, 0, 2, 3).unsqueeze(0))))
+        print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+                                                dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
 
         print('Avg. PSNR')
-        # print('pip: {:.4f}'.format(avg_psnr(gt.cpu().numpy(), pip.cpu().numpy())))
-        print('dip: {:.4f}'.format(avg_psnr(gt.cpu().numpy(), dip.cpu().numpy())))
         print('dip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_ref.cpu().numpy())))
         print('pip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), pip_ref.cpu().numpy())))
-        print('3d-dip: {:.4f}'.format(avg_psnr(gt.cpu().numpy(), dip_3d.cpu().numpy())))
+        print('3d-dip: {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_3d_ref.cpu().numpy())))
 
 
 if __name__ == '__main__':
