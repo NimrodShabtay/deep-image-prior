@@ -38,6 +38,8 @@ parser.add_argument('--input_index', default=0, type=int)
 parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
+parser.add_argument('--noise_type', default='gaussian', type=str)
+
 
 args = parser.parse_args()
 
@@ -102,6 +104,7 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            crop_shape=None,
                            batch_size=args.batch_size,
                            arch_mode=mode,
+                           noise_type=args.noise_type,
                            train=True,
                            temp_stride=1,
                            mode='cont')
@@ -114,6 +117,7 @@ vid_dataset_eval = VideoDataset(args.input_vid_path,
                                 crop_shape=None,
                                 batch_size=args.batch_size,
                                 arch_mode=mode,
+                                noise_type=args.noise_type,
                                 train=False,
                                 temp_stride=1,
                                 mode='cont')
@@ -237,6 +241,8 @@ log_config = {
     'Sequence length': vid_dataset.batch_size,
     'Video length': vid_dataset.n_frames,
     '# of sequences': vid_dataset.n_batches,
+    'noise_type': args.noise_type,
+    'Gauss_sigma': sigma,
     'save every': show_every
 }
 log_config.update(**vid_dataset.freq_dict)

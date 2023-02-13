@@ -41,6 +41,7 @@ parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--freq_th', default=20, type=int)
 parser.add_argument('--noise_depth', default=32, type=int)
 parser.add_argument('--a', default=1., type=float)
+parser.add_argument('--supervision', default='gaussian', type=str)
 
 args = parser.parse_args()
 
@@ -50,6 +51,7 @@ PLOT = True
 sigma = 25
 sigma_ = sigma/255.
 gaussian_a = args.a
+supervision_type = args.supervision_type
 
 if args.index == -1:
     fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
@@ -60,13 +62,8 @@ elif args.index == -2:
     base_path = './data/videos/rollerblade'
     save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
-    # fnames = sorted(glob.glob('./data/videos/rollerblade/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/blackswan/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/judo/*.jpg'))
-    fnames = sorted(glob.glob(base_path + '/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/tennis/*.png'))
+    fnames = sorted(glob.glob(base_path + '/*.*'))
     fnames_list = fnames
-    # fnames_list = np.random.choice(fnames, 8, replace=False)
 else:
     fnames = ['data/denoising/F16_GT.png', 'data/inpainting/kate.png', 'data/inpainting/vase.png',
               'data/sr/zebra_GT.png', 'data/denoising/synthetic_img.png', 'data/denoising/synthetic3_img_600.png',
@@ -91,9 +88,14 @@ for fname in fnames_list:
         img_np = pil_to_np(img_pil)
         output_depth = img_np.shape[0]
 
-        img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
-        # img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
-        # img_noisy_pil, img_noisy_np = img_pil, img_np
+        if supervision_type == 'gaussian':
+            img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
+        elif supervision_type == 'poisson':
+            img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
+        elif supervision_type == 'fit':
+            img_noisy_pil, img_noisy_np = img_pil, img_np
+        else:
+            raise ValueError('Supervision type not supported {}'.format(supervision_type))
 
     else:
         assert False
@@ -264,6 +266,14 @@ for fname in fnames_list:
             visualize_learned_frequencies(net_input_saved)
 
         wandb.log({'training loss': total_loss.item()}, commit=True)
+
+        if i == num_iter - 2:
+            if args.index == -2:
+                print(compare_psnr(img_np, out_np))
+                img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+                img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+                np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
+
         return total_loss
 
     log_config = {
@@ -330,11 +340,13 @@ for fname in fnames_list:
     log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
     wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
     wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
-    # wandb.log({'training_time': t_training}, commit=False)
-    if args.index == -2:
-        print(compare_psnr(out_np, img_np))
-        img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
-        img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+
+    # if args.index == -2:
+    #     print(compare_psnr(img_np, out_np))
+    #     wandb.log({'psnr_gt': compare_psnr(img_np, out_np)})
+    #     img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+    #     img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+    #     np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
 
     q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
     plt.plot(psnr_gt_list)
