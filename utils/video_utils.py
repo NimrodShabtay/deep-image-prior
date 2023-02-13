@@ -3,7 +3,7 @@ import numpy as np
 import torch.utils.data
 import random
 from PIL import Image
-from utils.denoising_utils import get_noisy_image
+from utils.denoising_utils import get_noisy_image, get_poisson_image
 from utils.common_utils import np_to_torch, get_input, crop_image, np_to_pil, pil_to_np
 from models.downsampler import Downsampler
 
@@ -73,8 +73,9 @@ def select_frames(input_seq, factor=1):
 
 
 class VideoDataset:
-    def __init__(self, video_path, input_type, task, crop_shape=None, sigma=25, mode='random', temp_stride=1,
-                 num_freqs=8, batch_size=8, arch_mode='2d', train=True, spatial_factor=4):
+    def __init__(self, video_path, input_type, task, crop_shape=None, noise_type='gaussian',
+                 sigma=25, mode='random', temp_stride=1, num_freqs=8, batch_size=8, arch_mode='2d',
+                 train=True, spatial_factor=4):
         self.sigma = sigma / 255
         self.mode = mode
         cap_video = cv2.VideoCapture(video_path)
@@ -89,11 +90,20 @@ class VideoDataset:
             frame = load_image(cap_video, resize=crop_shape)
             self.images.append(np_to_torch(frame))
             if task == 'denoising':
-                self.degraded_images.append(np_to_torch(get_noisy_image(frame, self.sigma)[-1]))
+                if noise_type == 'gaussian':
+                    deg_img = np_to_torch(get_noisy_image(frame, self.sigma)[-1])
+                elif noise_type == 'poisson':
+                    deg_img = np_to_torch(get_poisson_image(frame)[-1])
+                else:
+                    raise ValueError('noise type {} is not supported'.format(noise_type))
+
             elif task == 'temporal_sr':
+                self.degraded_images.append(deg_img)
                 self.degraded_images.append(np_to_torch(frame))
+
             elif task == 'spatial_sr':
-                self.degraded_images.append(np_to_torch(self.downsampler.downsmaple_sequence(np.expand_dims(frame, axis=0))[0]))
+                self.degraded_images.append(
+                    np_to_torch(self.downsampler.downsmaple_sequence(np.expand_dims(frame, axis=0))[0]))
 
         cap_video.release()
         self.images = torch.cat(self.images)

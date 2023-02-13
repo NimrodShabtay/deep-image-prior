@@ -57,13 +57,13 @@ if args.index == -1:
     if args.dataset_index != -1:
         fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
 elif args.index == -2:
-    base_path = './data/videos/blackswan_cropped_30'
-    save_dir = 'plots/{}/denoising'.format(base_path.split('/')[-1])
+    base_path = './data/videos/rollerblade'
+    save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
     # fnames = sorted(glob.glob('./data/videos/rollerblade/*.png'))
     # fnames = sorted(glob.glob('./data/videos/blackswan/*.png'))
     # fnames = sorted(glob.glob('./data/videos/judo/*.jpg'))
-    fnames = sorted(glob.glob(base_path + '/*.jpg'))
+    fnames = sorted(glob.glob(base_path + '/*.png'))
     # fnames = sorted(glob.glob('./data/videos/tennis/*.png'))
     fnames_list = fnames
     # fnames_list = np.random.choice(fnames, 8, replace=False)
@@ -90,17 +90,11 @@ for fname in fnames_list:
         img_pil = crop_image(get_image(fname, imsize)[0], d=32)
         img_np = pil_to_np(img_pil)
         output_depth = img_np.shape[0]
-        # if args.index == -2:
-        #     from utils.video_utils import crop_and_resize
-        #     img_np = crop_and_resize(img_np.transpose(1, 2, 0), (192, 384))
-        #     img_np = img_np.transpose(2, 0, 1)
-        #     img_pil = np_to_pil(img_np)
 
         img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
+        # img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
         # img_noisy_pil, img_noisy_np = img_pil, img_np
 
-        # if PLOT:
-        #     plot_image_grid([img_np, img_noisy_np], 4, 6)
     else:
         assert False
 
@@ -146,14 +140,13 @@ for fname in fnames_list:
         #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
-        num_iter = 3000
+        num_iter = 1801
         figsize = 4
         freq_dict = {
             'method': 'log',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
             'base': 2 ** (adapt_lim / (args.num_freqs-1)),
-            # 'base': 2,
         }
 
         if INPUT == 'noise':
@@ -168,16 +161,16 @@ for fname in fnames_list:
                       skip_n33u=128,
                       skip_n11=4,
                       num_scales=5,
-                      # act_fun='Gaussian',
-                      # gaussian_a=gaussian_a,
+                      act_fun='LeakyReLU',
                       upsample_mode='bilinear').type(dtype)
 
         # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
         # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+        #                 outermost_linear=True).type(dtype)
     else:
         assert False
 
-    enc = LearnableFourierPositionalEncoding(2, (img_pil.size[1], img_pil.size[0]), 256, 128, input_depth, 10).type(dtype)
     net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
 
     # Compute number of parameters
@@ -219,10 +212,8 @@ for fname in fnames_list:
             else:
                 net_input_ = net_input_saved
 
-            if freq_dict['method'] == 'learn2':
-                net_input = enc(net_input_)
-            else:
-                net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+            net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+
         else:
             net_input = net_input_saved
 
@@ -254,17 +245,17 @@ for fname in fnames_list:
             # visualize_fourier(out[0].detach().cpu(), iter=i)
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
-        # if i % show_every:
-        #     if psrn_noisy - psrn_noisy_last < -2:
-        #         print('Falling back to previous checkpoint.')
-        #
-        #         for new_param, net_param in zip(last_net, net.parameters()):
-        #             net_param.data.copy_(new_param.cuda())
-        #
-        #         return total_loss * 0
-        #     else:
-        #         last_net = [x.detach().cpu() for x in net.parameters()]
-        #         psrn_noisy_last = psrn_noisy
+        if i % show_every:
+            if psrn_noisy - psrn_noisy_last < -2:
+                print('Falling back to previous checkpoint.')
+
+                for new_param, net_param in zip(last_net, net.parameters()):
+                    net_param.data.copy_(new_param.cuda())
+
+                return total_loss * 0
+            else:
+                last_net = [x.detach().cpu() for x in net.parameters()]
+                psrn_noisy_last = psrn_noisy
 
         i += 1
 
@@ -291,10 +282,10 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebattle'],
-                     name='{}_depth_{}_{}_{}'.format(filename, input_depth, '{}'.format(INPUT), gaussian_a),
-                     job_type='{}_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim, gaussian_a),
-                     group='Denoising',
+                           'denoising', 'rebuttle'],
+                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
+                     job_type='rollerblade_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     group='Rebuttle - PIP video denoising (fbf)',
                      mode='online',
                      save_code=True,
                      config=log_config,
@@ -302,12 +293,11 @@ for fname in fnames_list:
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
-    # wandb.watch(net, 'all')
     log_input_images(img_noisy_np, img_np)
     # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
     print('Number of params: %d' % s)
     print(net)
-    p = get_params(OPT_OVER, net, net_input, input_encoder=enc)
+    p = get_params(OPT_OVER, net, net_input)
     # if train_input:
     #     if INPUT == 'infer_freqs':
     #         if freq_dict['method'] == 'learn2':
@@ -328,11 +318,8 @@ for fname in fnames_list:
     #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
     if INPUT == 'infer_freqs':
-        if freq_dict['method'] == 'learn2':
-            net_input = enc(net_input_saved)
-        else:
-            net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
-                                                      only_cosine=freq_dict['cosine_only'])
+        net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
+                                                  only_cosine=freq_dict['cosine_only'])
         if train_input:
             log_inputs(net_input)
     else:

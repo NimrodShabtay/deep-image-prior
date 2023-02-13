@@ -88,6 +88,8 @@ def act(act_fun='LeakyReLU', a=1.):
             return nn.Sequential()
         elif act_fun == 'Gaussian':
             return GaussianActivation(trainable=False, a=a)
+        elif act_fun == 'sin':
+            return SirenAct(omega_0=30)
         else:
             assert False
     else:
@@ -155,3 +157,12 @@ class GaussianActivation(nn.Module):
 
     def forward(self, x):
         return torch.exp(-x**2/(2*self.a**2))
+
+
+class SirenAct(nn.Module):
+    def __init__(self, omega_0=30):
+        super(SirenAct, self).__init__()
+        self.omega_0 = omega_0
+
+    def forward(self, x):
+        return torch.sin(self.omega_0 * x)

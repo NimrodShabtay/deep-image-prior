@@ -19,6 +19,7 @@ import numpy as np
 import tqdm
 # from skimage.measure import compare_psnr
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
+from video_consistency_check import SSIM3D
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -36,6 +37,8 @@ parser.add_argument('--input_vid_path', default='', type=str, required=True)
 parser.add_argument('--input_index', default=0, type=int)
 parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
+parser.add_argument('--batch_size', default=6, type=int)
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -49,6 +52,7 @@ def eval_video(val_dataset, model, epoch):
     spatial_size = vid_dataset.get_cropped_video_dims()
     img_for_video = np.zeros((val_dataset.n_frames, 3, *spatial_size), dtype=np.uint8)
     img_for_psnr = np.zeros((val_dataset.n_frames, 3, *spatial_size), dtype=np.float32)
+    ssim_loss = SSIM3D(window_size=11)
 
     val_dataset.init_batch_list()
     with torch.no_grad():
@@ -71,11 +75,16 @@ def eval_video(val_dataset, model, epoch):
             img_for_video[batch_data['cur_batch']] = (out_rgb * 255).astype(np.uint8)
 
     ignore_start_ind = vid_dataset_eval.n_batches * vid_dataset_eval.batch_size
-    psnr_whole_video = compare_psnr(val_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
-                                    img_for_psnr[:ignore_start_ind])
+    psnr_whole_video = compare_psnr(val_dataset.get_all_gt(numpy=True)[2:ignore_start_ind],
+                                    img_for_psnr[2:ignore_start_ind])
+    ssim_whole_video = ssim_loss(
+        val_dataset.get_all_gt(numpy=False)[2:ignore_start_ind].permute(1, 0, 2, 3).unsqueeze(0),
+        torch.from_numpy(img_for_psnr[2:ignore_start_ind]).permute(1, 0, 2, 3).unsqueeze(0))
+
     wandb.log({'Checkpoint (FPS=10)'.format(epoch): wandb.Video(img_for_video, fps=10, format='mp4'),
                'Checkpoint (FPS=25)'.format(epoch): wandb.Video(img_for_video, fps=25, format='mp4'),
-               'Video PSNR': psnr_whole_video},
+               'Video PSNR': psnr_whole_video,
+               'Video 3D-SSIM': ssim_whole_video},
               commit=True)
     torch.save({
         'epoch': epoch,
@@ -91,7 +100,7 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            task='denoising',
                            sigma=sigma,
                            crop_shape=None,
-                           batch_size=6,
+                           batch_size=args.batch_size,
                            arch_mode=mode,
                            train=True,
                            temp_stride=1,
@@ -103,7 +112,7 @@ vid_dataset_eval = VideoDataset(args.input_vid_path,
                                 num_freqs=args.num_freqs,
                                 task='denoising',
                                 crop_shape=None,
-                                batch_size=6,
+                                batch_size=args.batch_size,
                                 arch_mode=mode,
                                 train=False,
                                 temp_stride=1,
