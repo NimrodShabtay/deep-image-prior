@@ -38,7 +38,7 @@ torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 
 imsize = -1
-factor = 8
+factor = 4
 enforse_div32 = 'CROP'  # we usually need the dimensions to be divisible by a power of two (32 in this case)
 PLOT = True
 show_every = 100
@@ -47,7 +47,7 @@ show_every = 100
 # e.g. x4/zebra_GT.png for factor=4, and x8/zebra_GT.png for factor=8
 
 if args.index == -1:
-    dataset_path = 'data/sr_datasets/Set5/images'
+    dataset_path = 'data/sr_datasets/Set14/images'
     fnames_list = sorted(glob.glob(dataset_path + '/*.*'))
     fnames = fnames_list
     if args.dataset_index != -1:
@@ -122,7 +122,7 @@ for path_to_image in fnames_list:
     #               upsample_mode='bilinear').type(dtype)
     # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
     # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-    net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+    net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
                     outermost_linear=True).type(dtype)
     # Losses
     mse = torch.nn.MSELoss().type(dtype)

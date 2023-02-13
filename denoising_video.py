@@ -38,6 +38,7 @@ parser.add_argument('--input_index', default=0, type=int)
 parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
+parser.add_argument('--noise_type', default='gaussian', type=str)
 
 args = parser.parse_args()
 
@@ -98,6 +99,7 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            input_type=INPUT,
                            num_freqs=args.num_freqs,
                            task='denoising',
+                           noise_type=args.noise_type,
                            sigma=sigma,
                            crop_shape=None,
                            batch_size=args.batch_size,
@@ -111,6 +113,7 @@ vid_dataset_eval = VideoDataset(args.input_vid_path,
                                 input_type=INPUT,
                                 num_freqs=args.num_freqs,
                                 task='denoising',
+                                noise_type=args.noise_type,
                                 crop_shape=None,
                                 batch_size=args.batch_size,
                                 arch_mode=mode,
@@ -150,7 +153,7 @@ if INPUT == 'noise':
                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
                   act_fun='LeakyReLU').type(dtype)
 else:
-    input_depth = args.num_freqs * 6  # 4 * F for spatial encoding, 4 * F for temporal encoding
+    input_depth = 128 #args.num_freqs * 6  # 4 * F for spatial encoding, 4 * F for temporal encoding
     if mode == '3d':
         net = skip_3d_mlp(input_depth, 3,
                           num_channels_down=[256, 256, 256, 256, 256, 256],
@@ -237,6 +240,8 @@ log_config = {
     'Sequence length': vid_dataset.batch_size,
     'Video length': vid_dataset.n_frames,
     '# of sequences': vid_dataset.n_batches,
+    'noise_type': args.noise_type,
+    'Gauss_sigma': sigma,
     'save every': show_every
 }
 log_config.update(**vid_dataset.freq_dict)
@@ -244,10 +249,10 @@ filename = os.path.basename(args.input_vid_path).split('.')[0]
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
-                       '{}-PIP'.format(mode)],
+                       '{}-PIP'.format(mode), args.noise_type],
                  name='{}_depth_{}_{}_{}_sigma_{}'.format(filename, input_depth, '{}'.format(INPUT),
                                                                           mode, sigma),
-                 job_type='{}_{}'.format(INPUT, LR),
+                 job_type='Combined_FF_{}_{}_{}'.format(INPUT, LR, args.noise_type),
                  group='Denoising - Video',
                  mode='online',
                  save_code=True,

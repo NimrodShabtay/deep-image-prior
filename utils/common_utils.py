@@ -182,7 +182,8 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
             net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
         elif freq_dict['method'] == 'log':
             freqs = freq_dict['base'] ** torch.linspace(0., freq_dict['n_freqs'] - 1, steps=freq_dict['n_freqs'])
-            net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
+            net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'],
+                                                      merge=False)
 
     elif method == 'infer_freqs':
         meshgrid_np = get_meshgrid(spatial_size)
@@ -341,12 +342,18 @@ def get_embedder(multires=10, i=0):
     return embed, embedder_obj.out_dim
 
 
-def generate_fourier_feature_maps(net_input, spatial_size, dtype=torch.float32, only_cosine=False):
+def generate_fourier_feature_maps(net_input, spatial_size, dtype=torch.float32, only_cosine=False, merge=True):
     meshgrid_np = get_meshgrid(spatial_size)
     meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0).type(dtype)
     vp = net_input * torch.unsqueeze(meshgrid, -1)
     if only_cosine:
         vp_cat = torch.cat((torch.cos(vp),), dim=-1)
+    elif merge:
+        temp_list = \
+            [(vp[:, :, :, 0, i] + vp[:, :, :, 1, j]) / 2 for i in range(vp.shape[-1]) for j in range(vp.shape[-1])]
+        combined_vp = torch.stack(temp_list, dim=-1)
+        vp_cat = torch.stack((torch.cos(combined_vp), torch.sin(combined_vp)), dim=-1)
+        # vp_cat = torch.stack((torch.cos(combined_vp), ), dim=-1)
     else:
         vp_cat = torch.cat((torch.cos(vp), torch.sin(vp)), dim=-1)
     return vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)

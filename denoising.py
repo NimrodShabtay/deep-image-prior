@@ -57,16 +57,12 @@ if args.index == -1:
     if args.dataset_index != -1:
         fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
 elif args.index == -2:
-    base_path = './data/videos/rollerblade'
-    save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
+    base_path = './data/videos/bike_picking_20_frames'
+    # base_path = '/home/nimrod/Projects/PolyU-Real-World-Noisy-Images-Dataset/CroppedImages/noisy/'
+    save_dir = 'plots/{}/denoising_pip/real'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
-    # fnames = sorted(glob.glob('./data/videos/rollerblade/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/blackswan/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/judo/*.jpg'))
-    fnames = sorted(glob.glob(base_path + '/*.png'))
-    # fnames = sorted(glob.glob('./data/videos/tennis/*.png'))
+    fnames = sorted(glob.glob(base_path + '/*.*'))
     fnames_list = fnames
-    # fnames_list = np.random.choice(fnames, 8, replace=False)
 else:
     fnames = ['data/denoising/F16_GT.png', 'data/inpainting/kate.png', 'data/inpainting/vase.png',
               'data/sr/zebra_GT.png', 'data/denoising/synthetic_img.png', 'data/denoising/synthetic3_img_600.png',
@@ -130,14 +126,6 @@ for fname in fnames_list:
         net = net.type(dtype)
 
     elif fname in fnames:
-        # img_f = rfft2(img_noisy_torch, norm='ortho')
-        # mag_img_f = torch.abs(img_f).cpu()
-        # bins = torch.Tensor([torch.Tensor([0]), *list(2 ** torch.linspace(0, args.freq_lim - 1, args.num_freqs))])
-        # hist = torch.histogram(mag_img_f, bins=bins)
-        # if hist.hist[-4:].sum() > args.freq_th:
-        #     adapt_lim = 8
-        # else:
-        #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
         num_iter = 1801
@@ -166,12 +154,20 @@ for fname in fnames_list:
 
         # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
         # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
         #                 outermost_linear=True).type(dtype)
     else:
         assert False
 
     net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
+
+    # Debug
+    # import matplotlib.pyplot as plt
+    # os.makedirs('./dumps/combined_ff_cos_only/', exist_ok=True)
+    # for ch_idx in range(net_input.shape[1]):
+    #     plt.matshow(net_input[0, ch_idx, :, :].cpu())
+    #     plt.savefig('./dumps/combined_ff_cos_only/{:03d}'.format(ch_idx))
+    #     plt.close('all')
 
     # Compute number of parameters
     s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -264,6 +260,13 @@ for fname in fnames_list:
             visualize_learned_frequencies(net_input_saved)
 
         wandb.log({'training loss': total_loss.item()}, commit=True)
+        if i == num_iter - 2:
+            if args.index == -2:
+                print(compare_psnr(img_np, out_np))
+                img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+                img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+                np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
+
         return total_loss
 
     log_config = {
@@ -275,17 +278,18 @@ for fname in fnames_list:
         'input type': INPUT,
         'Train input': train_input,
         'Reg. Noise STD': reg_noise_std,
-        'gaussian_a': gaussian_a
+        'gaussian_a': gaussian_a,
+        'Sigma': sigma
     }
     log_config.update(**freq_dict)
     filename = os.path.basename(fname).split('.')[0]
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebuttle'],
+                           'denoising', 'combined_ff'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='rollerblade_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
-                     group='Rebuttle - PIP video denoising (fbf)',
+                     job_type='Combined_FF_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     group='Denoising',
                      mode='online',
                      save_code=True,
                      config=log_config,
@@ -331,10 +335,12 @@ for fname in fnames_list:
     wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
     wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
     # wandb.log({'training_time': t_training}, commit=False)
-    if args.index == -2:
-        print(compare_psnr(out_np, img_np))
-        img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
-        img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+    # if args.index == -2:
+    #     print(compare_psnr(img_np, out_np))
+    #     wandb.log({'psnr_gt': compare_psnr(img_np, out_np)})
+    #     img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+    #     img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+    #     np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
 
     q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
     plt.plot(psnr_gt_list)

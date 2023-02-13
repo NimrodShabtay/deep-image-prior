@@ -3,7 +3,7 @@ import numpy as np
 import torch.utils.data
 import random
 from PIL import Image
-from utils.denoising_utils import get_noisy_image
+from utils.denoising_utils import get_noisy_image, get_poisson_image
 from utils.common_utils import np_to_torch, get_input, crop_image, np_to_pil, pil_to_np
 from models.downsampler import Downsampler
 
@@ -73,8 +73,9 @@ def select_frames(input_seq, factor=1):
 
 
 class VideoDataset:
-    def __init__(self, video_path, input_type, task, crop_shape=None, sigma=25, mode='random', temp_stride=1,
-                 num_freqs=8, batch_size=8, arch_mode='2d', train=True, spatial_factor=4):
+    def __init__(self, video_path, input_type, task, crop_shape=None, noise_type='gaussian',
+                 sigma=25, mode='random', temp_stride=1, num_freqs=8, batch_size=8, arch_mode='2d',
+                 train=True, spatial_factor=4):
         self.sigma = sigma / 255
         self.mode = mode
         cap_video = cv2.VideoCapture(video_path)
@@ -89,7 +90,15 @@ class VideoDataset:
             frame = load_image(cap_video, resize=crop_shape)
             self.images.append(np_to_torch(frame))
             if task == 'denoising':
-                self.degraded_images.append(np_to_torch(get_noisy_image(frame, self.sigma)[-1]))
+                if noise_type == 'gaussian':
+                    deg_img = np_to_torch(get_noisy_image(frame, self.sigma)[-1])
+                elif noise_type == 'poisson':
+                    deg_img = np_to_torch(get_poisson_image(frame)[-1])
+                else:
+                    raise ValueError('noise type {} is not supported'.format(noise_type))
+
+                self.degraded_images.append(deg_img)
+
             elif task == 'temporal_sr':
                 self.degraded_images.append(np_to_torch(frame))
             elif task == 'spatial_sr':
@@ -118,10 +127,17 @@ class VideoDataset:
             'n_freqs': num_freqs,
             'base': 2 ** (8 / (num_freqs - 1)),
         }
-        self.input_depth = 32 if input_type == 'noise' else num_freqs * 4
+        self.spatial_x_f = 32
+        self.spatial_y_f = 32
+        self.spatial_t_f = 2
+
+        # self.input_depth = 32 if input_type == 'noise' else num_freqs * 4
+        self.input_depth = 64
+        self.dtype = torch.cuda.FloatTensor
 
         self.init_batch_list()
         self.init_input()
+
 
         if self.train is True:
             if task == 'temporal_sr':
@@ -209,9 +225,10 @@ class VideoDataset:
         return batch_data
 
     def add_sequence_positional_encoding(self):
-        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-7,
-                                                         steps=self.freq_dict['n_freqs'])
-        # freqs = torch.Tensor([1])
+        # freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-6,
+        #                                                  steps=self.freq_dict['n_freqs'])
+        freqs = 2 ** torch.linspace(0., self.freq_dict['n_freqs'] - 6, steps=self.freq_dict['n_freqs'])
+
         if self.input_type == 'infer_freqs':
             self.input = torch.cat([self.input, freqs], dim=0)
         else:
@@ -220,9 +237,31 @@ class VideoDataset:
                                                                             self.n_frames + 1) / self.n_frames  # FF X frames
             vp = vp.T.view(self.n_frames, self.freq_dict['n_freqs'], 1, 1).repeat(1, 1, *spatial_size)
             # vp = vp.T.view(self.n_frames, 1, 1, 1).repeat(1, 1, *spatial_size)
-            time_pe = torch.cat((torch.cos(vp), torch.sin(vp)), dim=1)
+            # time_pe = torch.cat((torch.cos(vp), torch.sin(vp)), dim=1)
+            time_pe = torch.cat((torch.cos(vp), ), dim=1)
             self.input = torch.cat([self.input, time_pe], dim=1)
             # self.input = torch.cat([self.input, vp], dim=1)
+
+    def create_combined_encoding(self):
+        from utils.common_utils import get_meshgrid
+
+        # Create Meshgrids
+        meshgrid_np = get_meshgrid((self.crop_height, self.crop_width))
+        meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0)
+        X, Y = meshgrid[:, :, :, 0], meshgrid[:, :, :, 1]
+        T = torch.arange(1, self.n_frames + 1) / self.n_frames
+        # Sample frequencies
+        alpha = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_x_f)
+        beta = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_y_f)
+        gamma = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_t_f)
+        alpha_xi = (alpha * torch.unsqueeze(X, -1)).repeat(self.n_frames, 1, 1, 1)
+        beta_yi = (torch.unsqueeze(Y, -1) * beta).repeat(self.n_frames, 1, 1, 1)
+        gamma_ti = torch.unsqueeze(T.view(-1, 1, 1).repeat(1, self.crop_height, self.crop_width), -1) * gamma
+        # Create arguments for FF PE encoding
+        argument = alpha_xi + beta_yi + gamma_ti
+        combined_ff = torch.cat((torch.cos(argument), torch.sin(argument)), dim=-1)
+
+        self.input = combined_ff.permute(0, 3, 1, 2).type(self.dtype)
 
     def init_input(self):
         if self.input_type == 'infer_freqs':
@@ -230,10 +269,11 @@ class VideoDataset:
                                                                   self.freq_dict['n_freqs'] - 1,
                                                                   steps=self.freq_dict['n_freqs'])
         else:
-            self.input = get_input(self.input_depth, self.input_type, (self.crop_height, self.crop_width),
-                                   freq_dict=self.freq_dict).repeat(self.n_frames, 1, 1, 1)
-        if self.input_type != 'noise':
-            self.add_sequence_positional_encoding()
+        #     self.input = get_input(self.input_depth, self.input_type, (self.crop_height, self.crop_width),
+        #                            freq_dict=self.freq_dict).repeat(self.n_frames, 1, 1, 1)
+        # if self.input_type != 'noise':
+        #     self.add_sequence_positional_encoding()
+            self.create_combined_encoding()
 
         if self.input_type == 'infer_freqs':
             self.input = self.input.unsqueeze(0).repeat(35, 1)
@@ -264,7 +304,7 @@ class VideoDataset:
                 batch_data['input_batch'], batch_data['img_degraded_batch'])
 
         batch_data['input_batch'] = batch_data['input_batch'].to(self.device)
-        batch_data['img_degraded_batch'] = batch_data['img_degraded_batch'].to(self.device)
+        batch_data['img_degraded_batch'] = batch_data['img_degraded_batch'].float().to(self.device)
 
         if self.arch_mode == '3d':
             batch_data['input_batch'] = batch_data['input_batch'].transpose(0, 1).unsqueeze(0)
