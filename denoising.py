@@ -131,7 +131,7 @@ for fname in fnames_list:
         num_iter = 1801
         figsize = 4
         freq_dict = {
-            'method': 'log',
+            'method': 'mixed',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
             'base': 2 ** (adapt_lim / (args.num_freqs-1)),
@@ -142,7 +142,8 @@ for fname in fnames_list:
         elif INPUT == 'meshgrid':
             input_depth = 2
         else:
-            input_depth = args.num_freqs * 4
+            # input_depth = args.num_freqs * 4
+            input_depth = args.num_freqs * 2
 
         net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
                       skip_n33d=128,

@@ -34,6 +34,10 @@ parser.add_argument('--input_vid_path', default='', type=str, required=True)
 parser.add_argument('--input_index', default=0, type=int)
 parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
+parser.add_argument('--ff_spatial_scale', default=6, type=int)
+parser.add_argument('--ff_temporal_scale', default=2, type=int)
+parser.add_argument('--batch_size', default=6, type=int)
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -47,25 +51,26 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            input_type=INPUT,
                            num_freqs=args.num_freqs,
                            task='temporal_sr',
-                           crop_shape=None,
-                           batch_size=6,
+                           batch_size=args.batch_size,
                            temp_stride=temporal_factor,
                            spatial_factor=spatial_factor,
+                           ff_spatial_scale=args.ff_spatial_scale,
+                           ff_temporal_scale=args.ff_temporal_scale,
                            arch_mode='2d',
                            mode='cont',
                            train=True)
 
-vid_dataset_eval = VideoDataset(args.input_vid_path,
-                                input_type=INPUT,
-                                num_freqs=args.num_freqs,
-                                task='temporal_sr',
-                                crop_shape=None,
-                                batch_size=6,
-                                temp_stride=1,
-                                spatial_factor=spatial_factor,
-                                mode='cont',
-                                arch_mode='2d',
-                                train=False)
+# vid_dataset_eval = VideoDataset(args.input_vid_path,
+#                                 input_type=INPUT,
+#                                 num_freqs=args.num_freqs,
+#                                 task='temporal_sr',
+#                                 crop_shape=None,
+#                                 batch_size=6,
+#                                 temp_stride=1,
+#                                 spatial_factor=spatial_factor,
+#                                 mode='cont',
+#                                 arch_mode='2d',
+#                                 train=False)
 pad = 'reflection'
 if INPUT == 'infer_freqs':
     OPT_OVER = 'net,input'
@@ -96,8 +101,7 @@ if INPUT == 'noise':
                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
                   act_fun='LeakyReLU').type(dtype)
 else:
-    # input_depth = args.num_freqs * 6  # 4 * F for spatial encoding, 2 * F for temporal encoding
-    input_depth = 128  # 4 * F for spatial encoding,
+    input_depth = args.num_freqs * 4 # 4 * F for spatial encoding,
     net = skip(input_depth, 3,
                num_channels_down=[256, 256, 256, 256, 256, 256],
                num_channels_up=[256, 256, 256, 256, 256, 256],
@@ -126,19 +130,19 @@ best_psnr_gt = -1.0
 i = 0
 
 
-def eval_video(val_dataset, model, epoch):
+def eval_video(v_dataset, model, epoch):
     spatial_size = vid_dataset.get_cropped_video_dims()
-    img_for_video = np.zeros((val_dataset.n_frames, 3, *spatial_size), dtype=np.uint8)
-    img_for_psnr = np.zeros((val_dataset.n_frames, 3, *spatial_size), dtype=np.float32)
+    img_for_video = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.uint8)
+    img_for_psnr = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.float32)
 
-    val_dataset.init_batch_list()
+    v_dataset.init_batch_list()
     with torch.no_grad():
         while True:
-            batch_data = val_dataset.next_batch()
+            batch_data = v_dataset.next_batch()
             if batch_data is None:
                 break
             batch_idx = batch_data['batch_idx']
-            batch_data = val_dataset.prepare_batch(batch_data)
+            batch_data = v_dataset.prepare_batch(batch_data)
 
             net_out = model(batch_data['input_batch'])
             out = net_out  # N x 3 x H x W
@@ -148,8 +152,8 @@ def eval_video(val_dataset, model, epoch):
             out_rgb = np.array([np_cvt_color(o) for o in out_np])
             img_for_video[batch_data['cur_batch']] = (out_rgb * 255).astype(np.uint8)
 
-    ignore_start_ind = vid_dataset_eval.n_batches * vid_dataset_eval.batch_size
-    psnr_whole_video = compare_psnr(val_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
+    ignore_start_ind = v_dataset.n_batches * v_dataset.batch_size
+    psnr_whole_video = compare_psnr(v_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
                                     img_for_psnr[:ignore_start_ind])
     wandb.log({'Checkpoint (FPS=10)'.format(epoch): wandb.Video(img_for_video, fps=10, format='mp4'),
                'Checkpoint (FPS=25)'.format(epoch): wandb.Video(img_for_video, fps=25, format='mp4'),
@@ -158,7 +162,7 @@ def eval_video(val_dataset, model, epoch):
 
     video_name = os.path.basename(args.input_vid_path[:-len('.avi')])
     os.makedirs('output/' + video_name, exist_ok=True)
-    for i in range(val_dataset.n_frames):
+    for i in range(v_dataset.n_frames):
         plt.imsave('output/{}/out_frame_{}_{}.png'.format(video_name, epoch, i),
                    img_for_video[i, :, :, :].transpose(1, 2, 0))
 
@@ -214,12 +218,12 @@ filename = os.path.basename(args.input_vid_path).split('.')[0]
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
-                       'PIP'],
+                       'Combined_FF'],
                  name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
                  job_type='Combined_FF_{}_{}'.format(INPUT, LR),
                  group='Video - Temporal SR',
-                 mode='online',
+                 mode='offline',
                  save_code=True,
                  config=log_config,
                  notes=''
@@ -234,7 +238,7 @@ n_batches = vid_dataset.n_batches
 
 # ckpt = torch.load('/mnt5/nimrod/deep-image-prior/temporal_sr_checkpoint_2000.pth')
 # net.load_state_dict(ckpt['model_state_dict'])
-eval_video(vid_dataset_eval, net, 0)
+eval_video(vid_dataset, net, 0)
 for epoch in tqdm.tqdm(range(n_epochs), desc='Epoch'):
     batch_cnt = 0
     running_psnr = 0.
@@ -257,7 +261,7 @@ for epoch in tqdm.tqdm(range(n_epochs), desc='Epoch'):
 
     # Infer video:
     if epoch % show_every == 0:
-        eval_video(vid_dataset_eval, net, epoch)
+        eval_video(vid_dataset, net, epoch)
 
 # Infer video at the end:
-eval_video(vid_dataset_eval, net, epoch)
+eval_video(vid_dataset, net, epoch)

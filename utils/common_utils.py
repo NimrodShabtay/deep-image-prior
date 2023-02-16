@@ -184,6 +184,13 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
             freqs = freq_dict['base'] ** torch.linspace(0., freq_dict['n_freqs'] - 1, steps=freq_dict['n_freqs'])
             net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'],
                                                       merge=False)
+        elif freq_dict['method'] == 'mixed':
+            from utils.mixed_gauss_ff import GaussianFourierFeatureTransform
+            feature_extractor = GaussianFourierFeatureTransform(2, freq_dict['n_freqs'], 10)
+            uv_grid_np = get_meshgrid(spatial_size)
+            uv_grid_torch = torch.from_numpy(uv_grid_np).unsqueeze(0)
+            uv_grid = nn.Parameter(uv_grid_torch, requires_grad=False)
+            net_input = nn.Parameter(feature_extractor(uv_grid), requires_grad=False)
 
     elif method == 'infer_freqs':
         meshgrid_np = get_meshgrid(spatial_size)

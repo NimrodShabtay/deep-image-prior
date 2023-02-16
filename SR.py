@@ -89,7 +89,7 @@ for path_to_image in fnames_list:
     tv_weight = 0.0
     OPTIMIZER = 'adam'
     freq_dict = {
-        'method': 'log',
+        'method': 'mixed',
         'cosine_only': False,
         'n_freqs': args.num_freqs,
         'base': 2 ** (args.freq_lim / (args.num_freqs - 1))
@@ -97,7 +97,8 @@ for path_to_image in fnames_list:
     if INPUT == 'meshgrid':
         input_depth = 2
     else:
-        input_depth = args.num_freqs * 4
+        # input_depth = args.num_freqs * 4
+        input_depth = args.num_freqs * 2
 
     if factor == 4:
         num_iter = 2000
@@ -113,17 +114,17 @@ for path_to_image in fnames_list:
     print('Input is {}, Depth = {}'.format(INPUT, input_depth))
 
     NET_TYPE = 'skip'  # UNet, ResNet
-    # net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-    #               skip_n33d=128,
-    #               skip_n33u=128,
-    #               skip_n11=4,
-    #               num_scales=5,
-    #               # act_fun='Gaussian',
-    #               upsample_mode='bilinear').type(dtype)
+    net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                  skip_n33d=128,
+                  skip_n33u=128,
+                  skip_n11=4,
+                  num_scales=5,
+                  # act_fun='Gaussian',
+                  upsample_mode='bilinear').type(dtype)
     # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
     # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-    net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
-                    outermost_linear=True).type(dtype)
+    # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
+    #                 outermost_linear=True).type(dtype)
     # Losses
     mse = torch.nn.MSELoss().type(dtype)
 
@@ -218,10 +219,10 @@ for path_to_image in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                            'freq_lim: {}'.format(args.freq_lim), 'sr', 'rebuttle', 'siren', 'Set14'],
-                     name='{}_depth_{}_{}_siren'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_siren'.format(INPUT, LR, args.num_freqs),
-                     group='Rebuttle',
+                            'freq_lim: {}'.format(args.freq_lim), 'sr', 'combined_ff', 'Set14'],
+                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
+                     job_type='combined_ff_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
+                     group='Super-Resolution - Dataset x4',
                      mode='online',
                      save_code=True,
                      config=log_config,

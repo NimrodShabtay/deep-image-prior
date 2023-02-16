@@ -1,10 +1,12 @@
 import cv2
 import numpy as np
 import torch.utils.data
+import torch.nn as nn
 import random
 from PIL import Image
 from utils.denoising_utils import get_noisy_image, get_poisson_image
 from utils.common_utils import np_to_torch, get_input, crop_image, np_to_pil, pil_to_np
+from utils.mixed_gauss_ff import GaussianFourierFeatureTransform
 from models.downsampler import Downsampler
 
 
@@ -75,7 +77,7 @@ def select_frames(input_seq, factor=1):
 class VideoDataset:
     def __init__(self, video_path, input_type, task, crop_shape=None, noise_type='gaussian',
                  sigma=25, mode='random', temp_stride=1, num_freqs=8, batch_size=8, arch_mode='2d',
-                 train=True, spatial_factor=4):
+                 train=True, spatial_factor=4, ff_spatial_scale=6, ff_temporal_scale=2):
         self.sigma = sigma / 255
         self.mode = mode
         cap_video = cv2.VideoCapture(video_path)
@@ -122,7 +124,7 @@ class VideoDataset:
         self.input_type = input_type
         self.sampled_indices = None
         self.freq_dict = {
-            'method': 'log',
+            'method': 'mixed',
             'cosine_only': False,
             'n_freqs': num_freqs,
             'base': 2 ** (8 / (num_freqs - 1)),
@@ -132,19 +134,20 @@ class VideoDataset:
         self.spatial_t_f = 2
 
         # self.input_depth = 32 if input_type == 'noise' else num_freqs * 4
-        self.input_depth = 64
+        self.input_depth = num_freqs * 2
+        self.ff_spatial_scale = ff_spatial_scale
+        self.ff_temporal_scale = ff_temporal_scale
+
         self.dtype = torch.cuda.FloatTensor
 
         self.init_batch_list()
         self.init_input()
-
 
         if self.train is True:
             if task == 'temporal_sr':
                 self.sampled_indices, self.degraded_images_vis = select_frames(self.degraded_images, factor=2)
             else:
                 self.sampled_indices = np.arange(0, self.n_frames)
-            # self.n_frames = self.images.shape[0]
 
     def get_cropped_video_dims(self):
         return self.crop_height, self.crop_width
@@ -152,7 +155,7 @@ class VideoDataset:
     def get_video_dims(self):
         return self.org_height, self.org_width
 
-    def init_batch_list(self):
+    def init_batch_list(self, mode=None):
         """
         List all the possible batch permutations
         """
@@ -163,7 +166,10 @@ class VideoDataset:
             self.batch_list = [(i, self.temporal_stride) for i in range(0, self.n_frames - self.batch_size + 1, 1)]
 
         self.n_batches = len(self.batch_list)
-        if self.mode == 'random':
+        if mode is None:
+            mode = self.mode
+
+        if mode == 'random':
             random.shuffle(self.batch_list)
 
     def sample_next_batch(self):
@@ -225,43 +231,31 @@ class VideoDataset:
         return batch_data
 
     def add_sequence_positional_encoding(self):
-        # freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-6,
-        #                                                  steps=self.freq_dict['n_freqs'])
-        freqs = 2 ** torch.linspace(0., self.freq_dict['n_freqs'] - 6, steps=self.freq_dict['n_freqs'])
-
         if self.input_type == 'infer_freqs':
+            freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs'] - 6,
+                                                             steps=self.freq_dict['n_freqs'])
             self.input = torch.cat([self.input, freqs], dim=0)
-        else:
-            spatial_size = self.input.shape[-2:]
-            vp = freqs.unsqueeze(1).repeat(1, self.n_frames) * torch.arange(1,
-                                                                            self.n_frames + 1) / self.n_frames  # FF X frames
-            vp = vp.T.view(self.n_frames, self.freq_dict['n_freqs'], 1, 1).repeat(1, 1, *spatial_size)
-            # vp = vp.T.view(self.n_frames, 1, 1, 1).repeat(1, 1, *spatial_size)
-            # time_pe = torch.cat((torch.cos(vp), torch.sin(vp)), dim=1)
-            time_pe = torch.cat((torch.cos(vp), ), dim=1)
-            self.input = torch.cat([self.input, time_pe], dim=1)
-            # self.input = torch.cat([self.input, vp], dim=1)
 
     def create_combined_encoding(self):
         from utils.common_utils import get_meshgrid
+        spatial_size = (self.crop_height, self.crop_width)
+        spatial_feature_extractor = GaussianFourierFeatureTransform(2, self.freq_dict['n_freqs'], self.ff_spatial_scale)
+        temporal_feature_extractor = GaussianFourierFeatureTransform(1, self.freq_dict['n_freqs'], self.ff_temporal_scale)
+        # Should the amount of frequencies in the spatial and temporal be the same???
+        uv_grid_np = get_meshgrid(spatial_size)
+        uv_grid_torch = torch.from_numpy(uv_grid_np).unsqueeze(0).repeat(self.n_frames, 1, 1, 1)
+        uv_grid = nn.Parameter(uv_grid_torch, requires_grad=False)
 
-        # Create Meshgrids
-        meshgrid_np = get_meshgrid((self.crop_height, self.crop_width))
-        meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0)
-        X, Y = meshgrid[:, :, :, 0], meshgrid[:, :, :, 1]
-        T = torch.arange(1, self.n_frames + 1) / self.n_frames
-        # Sample frequencies
-        alpha = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_x_f)
-        beta = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_y_f)
-        gamma = torch.normal(torch.zeros(self.input_depth), torch.ones(self.input_depth) * self.spatial_t_f)
-        alpha_xi = (alpha * torch.unsqueeze(X, -1)).repeat(self.n_frames, 1, 1, 1)
-        beta_yi = (torch.unsqueeze(Y, -1) * beta).repeat(self.n_frames, 1, 1, 1)
-        gamma_ti = torch.unsqueeze(T.view(-1, 1, 1).repeat(1, self.crop_height, self.crop_width), -1) * gamma
-        # Create arguments for FF PE encoding
-        argument = alpha_xi + beta_yi + gamma_ti
-        combined_ff = torch.cat((torch.cos(argument), torch.sin(argument)), dim=-1)
+        t_grid_np = np.linspace(0, 1, self.n_frames)
+        t_grid_torch = torch.from_numpy(t_grid_np).view(-1, 1, 1, 1).repeat(1, 1, *spatial_size)
+        t_grid = nn.Parameter(t_grid_torch, requires_grad=False)
 
-        self.input = combined_ff.permute(0, 3, 1, 2).type(self.dtype)
+        ax_by = nn.Parameter(spatial_feature_extractor(uv_grid, multiply_only=True), requires_grad=False)
+        ct = nn.Parameter(temporal_feature_extractor(t_grid, multiply_only=True), requires_grad=False)
+        combined_axis_arg = torch.cat([ax_by, ct], dim=1)
+        # Should the merge be by concat?
+
+        self.input = torch.cat([torch.sin(combined_axis_arg), torch.cos(combined_axis_arg)], dim=1)
 
     def init_input(self):
         if self.input_type == 'infer_freqs':
@@ -269,10 +263,6 @@ class VideoDataset:
                                                                   self.freq_dict['n_freqs'] - 1,
                                                                   steps=self.freq_dict['n_freqs'])
         else:
-        #     self.input = get_input(self.input_depth, self.input_type, (self.crop_height, self.crop_width),
-        #                            freq_dict=self.freq_dict).repeat(self.n_frames, 1, 1, 1)
-        # if self.input_type != 'noise':
-        #     self.add_sequence_positional_encoding()
             self.create_combined_encoding()
 
         if self.input_type == 'infer_freqs':
