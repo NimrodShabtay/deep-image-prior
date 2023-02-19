@@ -244,7 +244,9 @@ log_config = {
     '# of sequences': vid_dataset.n_batches,
     'noise_type': args.noise_type,
     'Gauss_sigma': sigma,
-    'save every': show_every
+    'save every': show_every,
+    'FF Spatial Frequency Scale': args.ff_spatial_scale,
+    'FF Temporal Frequency Scale': args.ff_temporal_scale
 }
 log_config.update(**vid_dataset.freq_dict)
 filename = os.path.basename(args.input_vid_path).split('.')[0]
@@ -254,12 +256,14 @@ run = wandb.init(project="Fourier features DIP",
                        '{}-PIP'.format(mode), args.noise_type],
                  name='{}_depth_{}_{}_{}_sigma_{}'.format(filename, input_depth, '{}'.format(INPUT),
                                                                           mode, sigma),
-                 job_type='Combined_FF_{}_{}_{}'.format(INPUT, LR, args.noise_type),
+                 job_type='Combined_FF_{}_{}_{}_{}_{}'.format(INPUT, LR, args.noise_type,
+                                                              args.ff_spatial_scale, args.ff_temporal_scale),
                  group='Denoising - Video',
-                 mode='offline',
+                 mode='online',
                  save_code=True,
                  config=log_config,
                  notes=''
+
                  )
 
 log_input_video(vid_dataset.get_all_gt(numpy=True),

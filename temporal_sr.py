@@ -211,7 +211,9 @@ log_config = {
     'Sequence length': vid_dataset.batch_size,
     'Video length': vid_dataset.n_frames,
     '# of sequences': vid_dataset.n_batches,
-    'save every': show_every
+    'save every': show_every,
+    'FF Spatial Frequency Scale': args.ff_spatial_scale,
+    'FF Temporal Frequency Scale': args.ff_temporal_scale
 }
 log_config.update(**vid_dataset.freq_dict)
 filename = os.path.basename(args.input_vid_path).split('.')[0]
@@ -221,9 +223,9 @@ run = wandb.init(project="Fourier features DIP",
                        'Combined_FF'],
                  name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
-                 job_type='Combined_FF_{}_{}'.format(INPUT, LR),
+                 job_type='Combined_FF_{}_{}_{}_{}'.format(INPUT, LR, args.ff_spatial_scale, args.ff_temporal_scale),
                  group='Video - Temporal SR',
-                 mode='offline',
+                 mode='online',
                  save_code=True,
                  config=log_config,
                  notes=''
@@ -236,8 +238,6 @@ wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
 print(net)
 n_batches = vid_dataset.n_batches
 
-# ckpt = torch.load('/mnt5/nimrod/deep-image-prior/temporal_sr_checkpoint_2000.pth')
-# net.load_state_dict(ckpt['model_state_dict'])
 eval_video(vid_dataset, net, 0)
 for epoch in tqdm.tqdm(range(n_epochs), desc='Epoch'):
     batch_cnt = 0
