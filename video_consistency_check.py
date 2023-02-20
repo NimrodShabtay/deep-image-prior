@@ -14,7 +14,7 @@ import os
 from utils.common_utils import crop_image
 import cv2
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 
 class r2p1d18_loss(nn.Module):
@@ -451,10 +451,10 @@ def main():
             'ignore_index': 2
         },
     }
-    task = ['denoising', 'spatial_sr'][0]
+    task = ['denoising', 'spatial_sr'][1]
     names = ['sheep', 'soccerball', 'tractor', 'blackswan', 'car_shadow', 'train', 'surf', 'bear', 'bike_picking',
              'car_turn', 'soupbox', 'camel', 'rollerblade', 'judo', 'dog']
-    for name in names[:2]:
+    for name in names:
         print('\n')
         print(name)
         print('-' * 20)
@@ -463,11 +463,6 @@ def main():
         if 0 <= remove_edges_start_index < 2:
             remove_edges_start_index = 2
 
-        gt = gt[2:-remove_edges_start_index]
-        dip = dip[2:-(remove_edges_start_index)]
-        dip_3d = dip_3d[2:-remove_edges_start_index]
-        # pip = pip[2:-(remove_edges_start_index+1)]
-
         dip_ref = []
         gt_ref = []
         pip_ref = []
@@ -475,45 +470,48 @@ def main():
         dip_binary_ref = []
         dip_3d_ref = []
         d = 64
+        try:
+            # for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising/*.png'.format(name))):
+            #     dip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+            #
+            # dip_ref = torch.from_numpy(np.stack(dip_ref)).cuda()
+            # dip_ref = dip_ref[2:-(remove_edges_start_index)]
 
-        for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising/*.png'.format(name))):
-            dip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+            for gt_path in sorted(glob.glob('./data/videos/{}_20_frames/*.*'.format(name))):
+                gt_ref.append(np.array(crop_image(Image.open(gt_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
 
-        dip_ref = torch.from_numpy(np.stack(dip_ref)).cuda()
-        dip_ref = dip_ref[2:-(remove_edges_start_index)]
+            gt_ref = torch.from_numpy(np.stack(gt_ref))#.cuda()
+            gt_ref = gt_ref[2:-(remove_edges_start_index)]
 
-        for gt_path in sorted(glob.glob('./data/videos/{}_20_frames/*.jpg'.format(name))):
-            gt_ref.append(np.array(crop_image(Image.open(gt_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+            # for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising_pip/*.png'.format(name))):
+            #     pip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+            #
+            # pip_ref = torch.from_numpy(np.stack(pip_ref)).cuda()
+            # pip_ref = pip_ref[2:-(remove_edges_start_index)]
 
-        gt_ref = torch.from_numpy(np.stack(gt_ref)).cuda()
-        gt_ref = gt_ref[2:-(remove_edges_start_index)]
+            for img_path in sorted(glob.glob('./data/eval_vid/spatial_sr/3d_dip/{}/*.*'.format(name))):
+                dip_3d_ref.append(
+                    np.array(crop_image(Image.open(img_path), d=d)).transpose(2, 0, 1).astype(np.float32) / 255)
 
-        for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising_pip/*.png'.format(name))):
-            pip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+            dip_3d_ref = torch.from_numpy(np.stack(dip_3d_ref))#.cuda()
+            dip_3d_ref = dip_3d_ref[2:-remove_edges_start_index]
 
-        pip_ref = torch.from_numpy(np.stack(pip_ref)).cuda()
-        pip_ref = pip_ref[2:-(remove_edges_start_index)]
+            ssim_loss = SSIM3D(window_size=11)
+            print('3D-SSIM')
+            # print('dip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+            #                                               dip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
+            # print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+            #                                               pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
+            print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+                                                    dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
 
-        for img_path in sorted(glob.glob('./data/eval_vid/denoised_videos/3d_dip/gauss_25/{}/*.*'.format(name))):
-            dip_3d_ref.append(
-                np.array(crop_image(Image.open(img_path), d=d)).transpose(2, 0, 1).astype(np.float32) / 255)
-
-        dip_3d_ref = torch.from_numpy(np.stack(dip_3d_ref)).cuda()
-        dip_3d_ref = dip_3d_ref[2:-remove_edges_start_index]
-
-        ssim_loss = SSIM3D(window_size=11)
-        print('3D-SSIM')
-        print('dip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
-                                                      dip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-        print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
-                                                      pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-        print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
-                                                dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-
-        print('Avg. PSNR')
-        print('dip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_ref.cpu().numpy())))
-        print('pip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), pip_ref.cpu().numpy())))
-        print('3d-dip: {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_3d_ref.cpu().numpy())))
+            print('Avg. PSNR')
+            # print('dip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_ref.cpu().numpy())))
+            # print('pip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), pip_ref.cpu().numpy())))
+            print('3d-dip: {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_3d_ref.cpu().numpy())))
+        except Exception as e:
+            print(e)
+            continue
 
 
 if __name__ == '__main__':
