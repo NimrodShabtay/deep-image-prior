@@ -38,7 +38,7 @@ torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 
 imsize = -1
-factor = 8
+factor = 4
 enforse_div32 = 'CROP'  # we usually need the dimensions to be divisible by a power of two (32 in this case)
 PLOT = True
 show_every = 100
@@ -54,10 +54,10 @@ if args.index == -1:
         fnames_list = fnames_list[args.dataset_index:args.dataset_index + 1]
     dataset_tag = dataset_path.split('/')[-2]
 elif args.index == -2:
-    base_path = './data/videos/dog'
-    save_dir = 'plots/{}/sr'.format(base_path.split('/')[-1])
+    base_path = './data/videos/sheep_20_frames'
+    save_dir = 'plots/{}/sr_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
-    fnames = sorted(glob.glob(base_path + '/*.jpg'))
+    fnames = sorted(glob.glob(base_path + '/*.*'))
     fnames_list = fnames
 else:
     fnames = ['data/sr/zebra_GT.png', 'data/denoising/F16_GT.png', 'data/inpainting/kate.png']
@@ -170,19 +170,19 @@ for path_to_image in fnames_list:
         psnr_HR = compare_psnr(imgs['HR_np'], torch_to_np(out_HR))
 
         # Backtracking
-        # if psnr_LR - psnr_LR_last < -5:
-        #     print('Falling back to previous checkpoint.')
-        #     if reduce_lr:
-        #         LR *= 0.1
-        #     for new_param, net_param in zip(last_net, net.parameters()):
-        #         net_param.data.copy_(new_param.cuda())
-        #
-        #     reduce_lr = False
-        #     return total_loss * 0
-        # else:
-        #     reduce_lr = True
-        #     last_net = [x.detach().cpu() for x in net.parameters()]
-        #     psnr_LR_last = psnr_LR
+        if psnr_LR - psnr_LR_last < -5:
+            print('Falling back to previous checkpoint.')
+            if reduce_lr:
+                LR *= 0.1
+            for new_param, net_param in zip(last_net, net.parameters()):
+                net_param.data.copy_(new_param.cuda())
+
+            reduce_lr = False
+            return total_loss * 0
+        else:
+            reduce_lr = True
+            last_net = [x.detach().cpu() for x in net.parameters()]
+            psnr_LR_last = psnr_LR
 
         # History
         psnr_history.append([psnr_LR, psnr_HR])
@@ -219,14 +219,14 @@ for path_to_image in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                            'freq_lim: {}'.format(args.freq_lim), 'sr', 'rebuttle', 'siren', 'Set14'],
-                     name='{}_depth_{}_{}_siren'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_siren'.format(INPUT, LR, args.num_freqs),
-                     group='Rebuttle',
+                            'freq_lim: {}'.format(args.freq_lim), 'sr'],
+                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
+                     job_type='sheep_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
+                     group='SR - PIP (fbf)',
                      mode='online',
                      save_code=True,
                      config=log_config,
-                     notes='GT is not normalized'
+                     notes=''
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)

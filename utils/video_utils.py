@@ -219,7 +219,7 @@ class VideoDataset:
         return batch_data
 
     def add_sequence_positional_encoding(self):
-        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-7,
+        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-2,
                                                          steps=self.freq_dict['n_freqs'])
         # freqs = torch.Tensor([1])
         if self.input_type == 'infer_freqs':

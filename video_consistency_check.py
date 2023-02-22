@@ -452,7 +452,7 @@ def main():
         },
     }
     task = ['denoising', 'spatial_sr'][1]
-    names = ['sheep', 'soccerball', 'tractor', 'blackswan', 'car_shadow', 'train', 'surf', 'bear', 'bike_picking',
+    names = ['sheep', 'soccerball', 'bear', 'bike_picking',
              'car_turn', 'soupbox', 'camel', 'rollerblade', 'judo', 'dog']
     for name in names:
         print('\n')
@@ -471,43 +471,43 @@ def main():
         dip_3d_ref = []
         d = 64
         try:
-            # for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising/*.png'.format(name))):
+            # for img_path in sorted(glob.glob('./plots/{}/sr_dip/*.png'.format(name))):
             #     dip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
             #
             # dip_ref = torch.from_numpy(np.stack(dip_ref)).cuda()
             # dip_ref = dip_ref[2:-(remove_edges_start_index)]
 
-            for gt_path in sorted(glob.glob('./data/videos/{}_20_frames/*.*'.format(name))):
+            for gt_path in sorted(glob.glob('./data/videos/{}/*.*'.format(name))):
                 gt_ref.append(np.array(crop_image(Image.open(gt_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
 
-            gt_ref = torch.from_numpy(np.stack(gt_ref))#.cuda()
+            gt_ref = torch.from_numpy(np.stack(gt_ref)).cuda()
             gt_ref = gt_ref[2:-(remove_edges_start_index)]
 
-            # for img_path in sorted(glob.glob('./plots/{}_20_frames/denoising_pip/*.png'.format(name))):
-            #     pip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
-            #
-            # pip_ref = torch.from_numpy(np.stack(pip_ref)).cuda()
-            # pip_ref = pip_ref[2:-(remove_edges_start_index)]
+            for img_path in sorted(glob.glob('./plots/{}/sr_pip/*.png'.format(name))):
+                pip_ref.append(np.array(crop_image(Image.open(img_path), d=64)).transpose(2, 0, 1).astype(np.float32) / 255)
+
+            pip_ref = torch.from_numpy(np.stack(pip_ref)).cuda()
+            pip_ref = pip_ref[2:-(remove_edges_start_index)]
 
             for img_path in sorted(glob.glob('./data/eval_vid/spatial_sr/3d_dip/{}/*.*'.format(name))):
                 dip_3d_ref.append(
                     np.array(crop_image(Image.open(img_path), d=d)).transpose(2, 0, 1).astype(np.float32) / 255)
 
-            dip_3d_ref = torch.from_numpy(np.stack(dip_3d_ref))#.cuda()
+            dip_3d_ref = torch.from_numpy(np.stack(dip_3d_ref)).cuda()
             dip_3d_ref = dip_3d_ref[2:-remove_edges_start_index]
 
             ssim_loss = SSIM3D(window_size=11)
             print('3D-SSIM')
             # print('dip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
             #                                               dip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-            # print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
-            #                                               pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
+            print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+                                                          pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
             print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
                                                     dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
 
             print('Avg. PSNR')
             # print('dip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_ref.cpu().numpy())))
-            # print('pip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), pip_ref.cpu().numpy())))
+            print('pip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), pip_ref.cpu().numpy())))
             print('3d-dip: {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_3d_ref.cpu().numpy())))
         except Exception as e:
             print(e)
