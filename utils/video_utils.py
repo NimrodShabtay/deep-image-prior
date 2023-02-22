@@ -155,13 +155,15 @@ class VideoDataset:
     def get_video_dims(self):
         return self.org_height, self.org_width
 
-    def init_batch_list(self, mode=None):
+    def init_batch_list(self, mode=None, temp_stride=None):
         """
         List all the possible batch permutations
         """
+        temp_stride = self.temporal_stride if temp_stride is None else temp_stride
+
         if self.arch_mode == '2d':
-            self.batch_list = [(i, self.temporal_stride) for i in range(0, self.n_frames - self.batch_size + 1,
-                                                                        self.batch_size * self.temporal_stride)]
+            self.batch_list = [(i, temp_stride) for i in range(0, self.n_frames - self.batch_size + 1,
+                                                               self.batch_size * temp_stride)]
         else:
             self.batch_list = [(i, self.temporal_stride) for i in range(0, self.n_frames - self.batch_size + 1, 1)]
 

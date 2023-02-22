@@ -135,7 +135,7 @@ def eval_video(v_dataset, model, epoch):
     img_for_video = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.uint8)
     img_for_psnr = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.float32)
 
-    v_dataset.init_batch_list()
+    v_dataset.init_batch_list(temp_stride=1)
     with torch.no_grad():
         while True:
             batch_data = v_dataset.next_batch()
