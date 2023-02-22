@@ -37,6 +37,7 @@ parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--ff_spatial_scale', default=6, type=int)
 parser.add_argument('--ff_temporal_scale', default=2, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
+parser.add_argument('--net_type', default='skip', type=str)
 
 args = parser.parse_args()
 
@@ -102,19 +103,20 @@ if INPUT == 'noise':
                   act_fun='LeakyReLU').type(dtype)
 else:
     input_depth = args.num_freqs * 4 # 4 * F for spatial encoding,
-    net = skip(input_depth, 3,
-               num_channels_down=[256, 256, 256, 256, 256, 256],
-               num_channels_up=[256, 256, 256, 256, 256, 256],
-               num_channels_skip=[8, 8, 8, 8, 8, 8],
-               filter_size_up=1,
-               filter_size_down=1,
-               filter_skip_size=1,
-               upsample_mode='bilinear',
-               downsample_mode='stride',
-               need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
-               act_fun='LeakyReLU').type(dtype)
-
-    # net = MLP(input_depth, 3, [256 for _ in range(12)]).type(dtype)
+    if args.net_type == 'skip':
+        net = skip(input_depth, 3,
+                   num_channels_down=[256, 256, 256, 256, 256, 256],
+                   num_channels_up=[256, 256, 256, 256, 256, 256],
+                   num_channels_skip=[8, 8, 8, 8, 8, 8],
+                   filter_size_up=1,
+                   filter_size_down=1,
+                   filter_skip_size=1,
+                   upsample_mode='bilinear',
+                   downsample_mode='stride',
+                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
+                   act_fun='LeakyReLU').type(dtype)
+    else:
+        net = MLP(input_depth, 3, [256 for _ in range(12)]).type(dtype)
 
 # Compute number of parameters
 s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -213,7 +215,8 @@ log_config = {
     '# of sequences': vid_dataset.n_batches,
     'save every': show_every,
     'FF Spatial Frequency Scale': args.ff_spatial_scale,
-    'FF Temporal Frequency Scale': args.ff_temporal_scale
+    'FF Temporal Frequency Scale': args.ff_temporal_scale,
+    'Model type': args.net_type
 }
 log_config.update(**vid_dataset.freq_dict)
 filename = os.path.basename(args.input_vid_path).split('.')[0]
@@ -221,8 +224,8 @@ run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
                        'Combined_FF'],
-                 name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
-                     filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
+                 name='{}_{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
+                     args.net_type, filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
                  job_type='Combined_FF_{}_{}_{}_{}'.format(INPUT, LR, args.ff_spatial_scale, args.ff_temporal_scale),
                  group='Video - Temporal SR',
                  mode='online',
