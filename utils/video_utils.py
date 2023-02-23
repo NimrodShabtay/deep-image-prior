@@ -241,23 +241,26 @@ class VideoDataset:
     def create_combined_encoding(self):
         from utils.common_utils import get_meshgrid
         spatial_size = (self.crop_height, self.crop_width)
-        spatial_feature_extractor = GaussianFourierFeatureTransform(2, self.freq_dict['n_freqs'], self.ff_spatial_scale)
-        temporal_feature_extractor = GaussianFourierFeatureTransform(1, self.freq_dict['n_freqs'], self.ff_temporal_scale)
+        # spatial_feature_extractor = GaussianFourierFeatureTransform(2, self.freq_dict['n_freqs'], self.ff_spatial_scale)
+        # temporal_feature_extractor = GaussianFourierFeatureTransform(1, self.freq_dict['n_freqs'], self.ff_temporal_scale)
+        feature_extractor = GaussianFourierFeatureTransform(3, self.freq_dict['n_freqs'],
+                                                            [self.ff_spatial_scale, self.ff_temporal_scale])
         # Should the amount of frequencies in the spatial and temporal be the same???
         uv_grid_np = get_meshgrid(spatial_size)
         uv_grid_torch = torch.from_numpy(uv_grid_np).unsqueeze(0).repeat(self.n_frames, 1, 1, 1)
-        uv_grid = nn.Parameter(uv_grid_torch, requires_grad=False)
+        # uv_grid = nn.Parameter(uv_grid_torch, requires_grad=False)
 
         t_grid_np = np.linspace(0, 1, self.n_frames)
         t_grid_torch = torch.from_numpy(t_grid_np).view(-1, 1, 1, 1).repeat(1, 1, *spatial_size)
-        t_grid = nn.Parameter(t_grid_torch, requires_grad=False)
+        grid_tensor = torch.cat([uv_grid_torch, t_grid_torch], dim=1)
+        grid = nn.Parameter(grid_tensor, requires_grad=False)
+        # t_grid = nn.Parameter(t_grid_torch, requires_grad=False)
 
-        ax_by = nn.Parameter(spatial_feature_extractor(uv_grid, multiply_only=True), requires_grad=False)
-        ct = nn.Parameter(temporal_feature_extractor(t_grid, multiply_only=True), requires_grad=False)
-        combined_axis_arg = torch.cat([ax_by, ct], dim=1)
-        # Should the merge be by concat?
+        ax_by_ct = nn.Parameter(feature_extractor(grid, multiply_only=True), requires_grad=False)
+        # ct = nn.Parameter(temporal_feature_extractor(t_grid, multiply_only=True), requires_grad=False)
+        # combined_axis_arg = torch.cat([ax_by, ct], dim=1)
 
-        self.input = torch.cat([torch.sin(combined_axis_arg), torch.cos(combined_axis_arg)], dim=1)
+        self.input = torch.cat([torch.sin(ax_by_ct), torch.cos(ax_by_ct)], dim=1)
 
     def init_input(self):
         if self.input_type == 'infer_freqs':

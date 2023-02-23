@@ -102,7 +102,7 @@ if INPUT == 'noise':
                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
                   act_fun='LeakyReLU').type(dtype)
 else:
-    input_depth = args.num_freqs * 4 # 4 * F for spatial encoding,
+    input_depth = args.num_freqs * 2 # 4 * F for spatial encoding,
     if args.net_type == 'skip':
         net = skip(input_depth, 3,
                    num_channels_down=[256, 256, 256, 256, 256, 256],

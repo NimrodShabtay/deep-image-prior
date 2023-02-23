@@ -28,8 +28,16 @@ class GaussianFourierFeatureTransform(nn.Module):
         self.num_channels = num_channels
         self.num_features = num_features
 
+        if isinstance(scale, list):
+            scale_ = scale[0]
+            temp_scale = scale[1]
+        else:
+            scale_ = scale
+            temp_scale = None
         # freqs are n-dimensional spatial frequencies, where n=num_channels
-        self.freqs = nn.Parameter(torch.randn(num_channels, num_features) * scale, requires_grad=False)
+        self.freqs = nn.Parameter(torch.randn(num_channels, num_features) * scale_, requires_grad=False)
+        if temp_scale is not None:
+            self.freqs[-1, :] = self.freqs[-1, :] * temp_scale/scale_
 
     def forward(self, x, multiply_only=False):
         assert x.dim() == 4, 'Expected 4D input (got {}D input)'.format(x.dim())
