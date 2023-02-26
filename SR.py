@@ -54,7 +54,7 @@ if args.index == -1:
         fnames_list = fnames_list[args.dataset_index:args.dataset_index + 1]
     dataset_tag = dataset_path.split('/')[-2]
 elif args.index == -2:
-    base_path = './data/videos/sheep_20_frames'
+    base_path = './data/videos/judo'
     save_dir = 'plots/{}/sr_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
     fnames = sorted(glob.glob(base_path + '/*.*'))
@@ -221,7 +221,7 @@ for path_to_image in fnames_list:
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
                             'freq_lim: {}'.format(args.freq_lim), 'sr'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='sheep_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
+                     job_type='judo_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
                      group='SR - PIP (fbf)',
                      mode='online',
                      save_code=True,

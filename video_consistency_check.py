@@ -454,7 +454,7 @@ def main():
     task = ['denoising', 'spatial_sr'][1]
     names = ['sheep', 'soccerball', 'bear', 'bike_picking',
              'car_turn', 'soupbox', 'camel', 'rollerblade', 'judo', 'dog']
-    for name in names:
+    for name in names[-2:-1]:
         print('\n')
         print(name)
         print('-' * 20)
@@ -502,8 +502,8 @@ def main():
             #                                               dip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
             print('pip (frames): {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
                                                           pip_ref.permute(1, 0, 2, 3).unsqueeze(0))))
-            print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
-                                                    dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
+            # print('3d-dip: {:.4f}'.format(ssim_loss(gt_ref.permute(1, 0, 2, 3).unsqueeze(0),
+            #                                         dip_3d_ref.permute(1, 0, 2, 3).unsqueeze(0))))
 
             print('Avg. PSNR')
             # print('dip (frames): {:.4f}'.format(avg_psnr(gt_ref.cpu().numpy(), dip_ref.cpu().numpy())))
