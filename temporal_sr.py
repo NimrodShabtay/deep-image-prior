@@ -17,6 +17,7 @@ import argparse
 import numpy as np
 import tqdm
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
+from video_consistency_check import SSIM3D
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -136,6 +137,7 @@ def eval_video(v_dataset, model, epoch):
     spatial_size = vid_dataset.get_cropped_video_dims()
     img_for_video = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.uint8)
     img_for_psnr = np.zeros((v_dataset.n_frames, 3, *spatial_size), dtype=np.float32)
+    ssim_loss = SSIM3D(window_size=11)
 
     v_dataset.init_batch_list(temp_stride=1)
     with torch.no_grad():
@@ -157,9 +159,14 @@ def eval_video(v_dataset, model, epoch):
     ignore_start_ind = v_dataset.n_batches * v_dataset.batch_size
     psnr_whole_video = compare_psnr(v_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
                                     img_for_psnr[:ignore_start_ind])
+    ssim_whole_video = ssim_loss(
+        v_dataset.get_all_gt(numpy=False)[2:ignore_start_ind].permute(1, 0, 2, 3).unsqueeze(0),
+        torch.from_numpy(img_for_psnr[2:ignore_start_ind]).permute(1, 0, 2, 3).unsqueeze(0))
+
     wandb.log({'Checkpoint (FPS=10)'.format(epoch): wandb.Video(img_for_video, fps=10, format='mp4'),
                'Checkpoint (FPS=25)'.format(epoch): wandb.Video(img_for_video, fps=25, format='mp4'),
-               'Video PSNR': psnr_whole_video},
+               'Video PSNR': psnr_whole_video,
+               'Video 3D-SSIM': ssim_whole_video},
               commit=True)
 
     video_name = os.path.basename(args.input_vid_path[:-len('.avi')])
