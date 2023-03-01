@@ -96,9 +96,9 @@ class VideoDataset:
                     deg_img = np_to_torch(get_poisson_image(frame)[-1])
                 else:
                     raise ValueError('noise type {} is not supported'.format(noise_type))
+                self.degraded_images.append(deg_img)
 
             elif task == 'temporal_sr':
-                self.degraded_images.append(deg_img)
                 self.degraded_images.append(np_to_torch(frame))
 
             elif task == 'spatial_sr':
