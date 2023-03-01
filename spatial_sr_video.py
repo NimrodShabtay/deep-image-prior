@@ -41,6 +41,8 @@ parser.add_argument('--input_vid_path', default='', type=str, required=True)
 parser.add_argument('--input_index', default=0, type=int)
 parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
+parser.add_argument('--ff_spatial_scale', default=6, type=int)
+parser.add_argument('--ff_temporal_scale', default=2, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
 
 args = parser.parse_args()
@@ -81,7 +83,7 @@ def eval_video(val_dataset, model, epoch):
             out_rgb = np.array([np_cvt_color(o) for o in out_np])
             img_for_video[batch_data['cur_batch']] = (out_rgb * 255).astype(np.uint8)
 
-    ignore_start_ind = vid_dataset_eval.n_batches * vid_dataset_eval.batch_size
+    ignore_start_ind = val_dataset.n_batches * val_dataset.batch_size
     psnr_whole_video = compare_psnr(val_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
                                     img_for_psnr[:ignore_start_ind])
     ssim_whole_video = ssim_loss(
@@ -114,20 +116,9 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            train=True,
                            temp_stride=temporal_factor,
                            spatial_factor=spatial_factor,
+                           ff_spatial_scale=args.ff_spatial_scale,
+                           ff_temporal_scale=args.ff_temporal_scale,
                            mode='cont')
-
-
-vid_dataset_eval = VideoDataset(args.input_vid_path,
-                                input_type=INPUT,
-                                num_freqs=args.num_freqs,
-                                task='spatial_sr',
-                                crop_shape=None,
-                                batch_size=args.batch_size,
-                                arch_mode=mode,
-                                train=False,
-                                temp_stride=temporal_factor,
-                                spatial_factor=spatial_factor,
-                                mode='cont')
 pad = 'reflection'
 if INPUT == 'infer_freqs':
     OPT_OVER = 'net,input'
@@ -142,7 +133,7 @@ OPTIMIZER = 'adam'  # 'LBFGS'
 exp_weight = 0.99
 if mode == '2d':
     show_every = 300  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
-    n_epochs = 10000  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
+    n_epochs = 5000  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
 
 
 num_iter = 1
@@ -161,7 +152,8 @@ if INPUT == 'noise':
                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
                   act_fun='LeakyReLU').type(dtype)
 else:
-    input_depth = args.num_freqs * 6  # 4 * F for spatial encoding, 4 * F for temporal encoding
+    # input_depth = args.num_freqs * 6  # 4 * F for spatial encoding, 4 * F for temporal encoding
+    input_depth = args.num_freqs * 2
     if mode == '3d':
         net = skip_3d_mlp(input_depth, 3,
                           num_channels_down=[256, 256, 256, 256, 256, 256],
@@ -206,7 +198,7 @@ def train_batch(batch_data):
     global j
 
     net_input_saved = batch_data['input_batch']
-    # noise = net_input_saved.detach().clone()
+    noise = net_input_saved.detach().clone()
     if INPUT == 'noise':
         if reg_noise_std > 0:
             net_input = net_input_saved + (noise.normal_() * reg_noise_std)
@@ -265,9 +257,9 @@ run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
                        '{}-PIP'.format(mode)],
-                 name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
+                 name='combined_ff_{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
-                 job_type='{}_{}'.format(INPUT, LR),
+                 job_type='Combined_FF_{}_{}_{}_{}_log_scale'.format(INPUT, LR, args.ff_spatial_scale, args.ff_temporal_scale),
                  group='Spatial SR - Video',
                  mode='online',
                  save_code=True,
@@ -293,8 +285,6 @@ for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
     vid_dataset.init_batch_list()
     for batch_cnt in tqdm.tqdm(range(n_batches), desc="Batch", position=1, leave=False):
         batch_data = vid_dataset.next_batch()
-    # batch_data = vid_dataset.sample_next_batch()
-    # batch_idx = batch_data['batch_idx']
         batch_data = vid_dataset.prepare_batch(batch_data)
         for j in range(num_iter):
             optimizer.zero_grad()
@@ -303,16 +293,15 @@ for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
             running_loss += loss.item()
             optimizer.step()
 
-    denom = n_batches #if mode == '3d' else (epoch + 1)
     # Log metrics for each epoch
-    wandb.log({'epoch loss': running_loss / denom, 'epoch psnr': running_psnr / denom}, commit=False)
+    wandb.log({'epoch loss': running_loss / n_batches, 'epoch psnr': running_psnr / n_batches}, commit=False)
     # log_images(np.array([np_cvt_color(o) for o in out_sequence]), epoch, 'Video-Denoising',
     #            commit=False)
 
     # Infer video:
     if epoch % show_every == 0:
-        eval_video(vid_dataset_eval, net, epoch)
+        eval_video(vid_dataset, net, epoch)
 
 
 # Infer video at the end:
-eval_video(vid_dataset_eval, net, epoch)
+eval_video(vid_dataset, net, epoch)

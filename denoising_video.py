@@ -156,7 +156,7 @@ if INPUT == 'noise':
                   need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
                   act_fun='LeakyReLU').type(dtype)
 else:
-    input_depth = args.num_freqs * 4  # 4 * F for spatial encoding, 4 * F for temporal encoding
+    input_depth = args.num_freqs * 2  # 4 * F for spatial encoding, 4 * F for temporal encoding
     if mode == '3d':
         net = skip_3d_mlp(input_depth, 3,
                           num_channels_down=[256, 256, 256, 256, 256, 256],
@@ -263,7 +263,6 @@ run = wandb.init(project="Fourier features DIP",
                  save_code=True,
                  config=log_config,
                  notes=''
-
                  )
 
 log_input_video(vid_dataset.get_all_gt(numpy=True),

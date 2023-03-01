@@ -35,7 +35,10 @@ class GaussianFourierFeatureTransform(nn.Module):
             scale_ = scale
             temp_scale = None
         # freqs are n-dimensional spatial frequencies, where n=num_channels
-        self.freqs = nn.Parameter(torch.randn(num_channels, num_features) * scale_, requires_grad=False)
+        ff = torch.abs(torch.randn(num_channels, num_features)) * scale_
+        ff = 2 ** ff
+        self.freqs = nn.Parameter(ff, requires_grad=False)
+
         if temp_scale is not None:
             self.freqs[-1, :] = self.freqs[-1, :] * temp_scale/scale_
 

@@ -262,6 +262,10 @@ for fname in fnames_list:
 
         wandb.log({'training loss': total_loss.item()}, commit=True)
         if i == num_iter - 2:
+            psrn_noisy = compare_psnr(img_noisy_np, out_np)
+            psrn_gt = compare_psnr(img_np, out_np)
+            psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0])
+            wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
             if args.index == -2:
                 print(compare_psnr(img_np, out_np))
                 img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
