@@ -278,7 +278,6 @@ for fname in fnames_list:
 
         if i == num_iter - 2:
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
-
             if args.index == -2:
                 print(compare_psnr(img_np, out_np))
                 img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
@@ -296,17 +295,17 @@ for fname in fnames_list:
         'input type': INPUT,
         'Train input': train_input,
         'Reg. Noise STD': reg_noise_std,
-        'gaussian_a': gaussian_a
+        'sigma': sigma
     }
     log_config.update(**freq_dict)
     filename = os.path.basename(fname).split('.')[0]
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebuttle'],
+                           'denoising', 'pertubation'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='rollerblade_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
-                     group='Rebuttle - PIP video denoising (fbf)',
+                     job_type='Pertubation_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     group='Denoising',
                      mode='online',
                      save_code=True,
                      config=log_config,

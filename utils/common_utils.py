@@ -341,10 +341,11 @@ def get_embedder(multires=10, i=0):
     return embed, embedder_obj.out_dim
 
 
-def generate_fourier_feature_maps(net_input, spatial_size, dtype=torch.float32, only_cosine=False):
+def generate_fourier_feature_maps(net_input, spatial_size, dtype=torch.float32, only_cosine=False, pertubation_std=0.0):
     meshgrid_np = get_meshgrid(spatial_size)
     meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0).type(dtype)
     vp = net_input * torch.unsqueeze(meshgrid, -1)
+    vp += (torch.rand_like(vp).normal_() * pertubation_std)
     if only_cosine:
         vp_cat = torch.cat((torch.cos(vp),), dim=-1)
     else:
