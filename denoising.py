@@ -39,17 +39,21 @@ parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--freq_th', default=20, type=int)
-parser.add_argument('--noise_depth', default=32, type=int)
+parser.add_argument('--sigma', default=25, type=int)
 parser.add_argument('--a', default=1., type=float)
+parser.add_argument('--supervision', default='gaussian', type=str)
+parser.add_argument('--net_type', default='skip', type=str)
+
 
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
-sigma = 25
+sigma = args.sigma
 sigma_ = sigma/255.
 gaussian_a = args.a
+supervision_type = args.supervision_type
 
 if args.index == -1:
     fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
@@ -57,9 +61,8 @@ if args.index == -1:
     if args.dataset_index != -1:
         fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
 elif args.index == -2:
-    base_path = './data/videos/bike_picking_20_frames'
-    # base_path = '/home/nimrod/Projects/PolyU-Real-World-Noisy-Images-Dataset/CroppedImages/noisy/'
-    save_dir = 'plots/{}/denoising_pip/real'.format(base_path.split('/')[-1])
+    base_path = './data/videos/rollerblade'
+    save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
     fnames = sorted(glob.glob(base_path + '/*.*'))
     fnames_list = fnames
@@ -87,9 +90,14 @@ for fname in fnames_list:
         img_np = pil_to_np(img_pil)
         output_depth = img_np.shape[0]
 
-        img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
-        # img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
-        # img_noisy_pil, img_noisy_np = img_pil, img_np
+        if supervision_type == 'gaussian':
+            img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
+        elif supervision_type == 'poisson':
+            img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
+        elif supervision_type == 'fit':
+            img_noisy_pil, img_noisy_np = img_pil, img_np
+        else:
+            raise ValueError('Supervision type not supported {}'.format(supervision_type))
 
     else:
         assert False
@@ -131,32 +139,39 @@ for fname in fnames_list:
         num_iter = 1801
         figsize = 4
         freq_dict = {
-            'method': 'mixed',
+            'method': 'log',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
             'base': 2 ** (adapt_lim / (args.num_freqs-1)),
         }
 
         if INPUT == 'noise':
-            input_depth = args.noise_depth
+            input_depth = 32
         elif INPUT == 'meshgrid':
             input_depth = 2
         else:
             # input_depth = args.num_freqs * 4
             input_depth = args.num_freqs * 2
 
-        net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-                      skip_n33d=128,
-                      skip_n33u=128,
-                      skip_n11=4,
-                      num_scales=5,
-                      act_fun='LeakyReLU',
-                      upsample_mode='bilinear').type(dtype)
-
-        # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
-        # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
-        #                 outermost_linear=True).type(dtype)
+        if args.net_type == 'skip':
+            net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                          skip_n33d=128,
+                          skip_n33u=128,
+                          skip_n11=4,
+                          num_scales=5,
+                          act_fun='LeakyReLU',
+                          upsample_mode='bilinear').type(dtype)
+        elif args.net_type == 'MLP':
+            net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
+        elif args.net_type == 'FCN':
+            net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+        elif args.net_type == 'SIREN':
+            net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+                            outermost_linear=True).type(dtype)
+        elif args.net_type == 'FCN_skip':
+            raise NotImplementedError('Implement')
+        else:
+            raise ValueError('net_type {} is not supported'.format(args.net_type))
     else:
         assert False
 

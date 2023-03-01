@@ -30,6 +30,7 @@ parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--reg_noise_std', default=0.03, type=float)
 parser.add_argument('--dataset_index', default=0, type=int)
+parser.add_argument('--net_type', default='skip', type=str)
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -57,7 +58,7 @@ elif args.index == -2:
     base_path = './data/videos/dog'
     save_dir = 'plots/{}/sr'.format(base_path.split('/')[-1])
     os.makedirs(save_dir, exist_ok=True)
-    fnames = sorted(glob.glob(base_path + '/*.jpg'))
+    fnames = sorted(glob.glob(base_path + '/*.*'))
     fnames_list = fnames
 else:
     fnames = ['data/sr/zebra_GT.png', 'data/denoising/F16_GT.png', 'data/inpainting/kate.png']
@@ -96,6 +97,8 @@ for path_to_image in fnames_list:
     }
     if INPUT == 'meshgrid':
         input_depth = 2
+    elif INPUT == 'noise':
+        input_depth = 32
     else:
         # input_depth = args.num_freqs * 4
         input_depth = args.num_freqs * 2
@@ -113,18 +116,26 @@ for path_to_image in fnames_list:
                           freq_dict=freq_dict).type(dtype)
     print('Input is {}, Depth = {}'.format(INPUT, input_depth))
 
-    NET_TYPE = 'skip'  # UNet, ResNet
-    net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-                  skip_n33d=128,
-                  skip_n33u=128,
-                  skip_n11=4,
-                  num_scales=5,
-                  # act_fun='Gaussian',
-                  upsample_mode='bilinear').type(dtype)
-    # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
-    # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-    # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=5, out_features=output_depth,
-    #                 outermost_linear=True).type(dtype)
+    if args.net_type == 'skip':
+        net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                      skip_n33d=128,
+                      skip_n33u=128,
+                      skip_n11=4,
+                      num_scales=5,
+                      act_fun='LeakyReLU',
+                      upsample_mode='bilinear').type(dtype)
+    elif args.net_type == 'MLP':
+        net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
+    elif args.net_type == 'FCN':
+        net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+    elif args.net_type == 'SIREN':
+        net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+                        outermost_linear=True).type(dtype)
+    elif args.net_type == 'FCN_skip':
+        raise NotImplementedError('Implement')
+    else:
+        raise ValueError('net_type {} is not supported'.format(args.net_type))
+
     # Losses
     mse = torch.nn.MSELoss().type(dtype)
 
@@ -170,19 +181,19 @@ for path_to_image in fnames_list:
         psnr_HR = compare_psnr(imgs['HR_np'], torch_to_np(out_HR))
 
         # Backtracking
-        # if psnr_LR - psnr_LR_last < -5:
-        #     print('Falling back to previous checkpoint.')
-        #     if reduce_lr:
-        #         LR *= 0.1
-        #     for new_param, net_param in zip(last_net, net.parameters()):
-        #         net_param.data.copy_(new_param.cuda())
-        #
-        #     reduce_lr = False
-        #     return total_loss * 0
-        # else:
-        #     reduce_lr = True
-        #     last_net = [x.detach().cpu() for x in net.parameters()]
-        #     psnr_LR_last = psnr_LR
+        if psnr_LR - psnr_LR_last < -5:
+            print('Falling back to previous checkpoint.')
+            if reduce_lr:
+                LR *= 0.1
+            for new_param, net_param in zip(last_net, net.parameters()):
+                net_param.data.copy_(new_param.cuda())
+
+            reduce_lr = False
+            return total_loss * 0
+        else:
+            reduce_lr = True
+            last_net = [x.detach().cpu() for x in net.parameters()]
+            psnr_LR_last = psnr_LR
 
         # History
         psnr_history.append([psnr_LR, psnr_HR])
@@ -190,7 +201,7 @@ for path_to_image in fnames_list:
         if PLOT and i % show_every == 0:
             print('Iteration %05d    PSNR_LR %.3f   PSNR_HR %.3f' % (i, psnr_LR, psnr_HR))
             wandb.log({'psnr_hr': psnr_HR, 'psnr_lr': psnr_LR}, commit=False)
-            out_HR_np = torch_to_np(out_HR)
+            # out_HR_np = torch_to_np(out_HR)
             # plot_image_grid([imgs['HR_np'], imgs['bicubic_np'], np.clip(out_HR_np, 0, 1)], factor=13, nrow=3)
         i += 1
 
@@ -226,7 +237,7 @@ for path_to_image in fnames_list:
                      mode='online',
                      save_code=True,
                      config=log_config,
-                     notes='GT is not normalized'
+                     notes=''
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)

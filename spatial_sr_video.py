@@ -4,16 +4,18 @@ import glob
 import random
 import signal
 
+from video_consistency_check import SSIM3D
 from models import *
 from models.skip_3d import skip_3d, skip_3d_mlp
-from utils.denoising_utils import *
 from utils.sr_utils import *
 from utils.wandb_utils import *
 from utils.video_utils import VideoDataset, DownsamplingSequence
 from utils.common_utils import np_cvt_color
-import torch.optim
-import matplotlib.pyplot as plt
+from utils.preemption import CHECKPOINT_NAME, resume_run, graceful_exit_handler
 
+import random
+import signal
+import torch.optim
 import os
 import wandb
 import argparse
@@ -21,9 +23,6 @@ import numpy as np
 import tqdm
 # from skimage.measure import compare_psnr
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
-from video_consistency_check import SSIM3D
-from utils.preemption import CHECKPOINT_NAME, resume_run, graceful_exit_handler
-
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -52,9 +51,6 @@ imsize = -1
 PLOT = True
 sigma = 25
 mode = ['2d', '3d'][0]
-
-
-signal.signal(signal.SIGTERM, graceful_exit_handler)
 
 
 def eval_video(val_dataset, model, epoch):
@@ -198,7 +194,7 @@ def train_batch(batch_data):
     global j
 
     net_input_saved = batch_data['input_batch']
-    noise = net_input_saved.detach().clone()
+    # noise = net_input_saved.detach().clone()
     if INPUT == 'noise':
         if reg_noise_std > 0:
             net_input = net_input_saved + (noise.normal_() * reg_noise_std)
@@ -245,14 +241,6 @@ log_config = {
 }
 log_config.update(**vid_dataset.freq_dict)
 filename = os.path.basename(args.input_vid_path).split('.')[0]
-
-# Code for resuming runs on Run-AI
-if os.path.isfile(CHECKPOINT_NAME):
-    net, optimizer, start_epoch, wandb_id = resume_run(net, optimizer)
-else:
-    start_epoch = 0
-    wandb_id = wandb.util.generate_id()
-
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
@@ -263,7 +251,6 @@ run = wandb.init(project="Fourier features DIP",
                  group='Spatial SR - Video',
                  mode='online',
                  save_code=True,
-                 id=wandb_id,
                  resume="allow",
                  config=log_config,
                  notes=''
@@ -279,7 +266,8 @@ img_idx = []
 downsampler = DownsamplingSequence(factor=spatial_factor)
 downsampler.set_dtype(dtype)
 
-for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
+
+for epoch in tqdm.tqdm(range(0, n_epochs), desc='Epoch', position=0):
     running_psnr = 0.
     running_loss = 0.
     vid_dataset.init_batch_list()
@@ -293,6 +281,7 @@ for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
             running_loss += loss.item()
             optimizer.step()
 
+    denom = n_batches
     # Log metrics for each epoch
     wandb.log({'epoch loss': running_loss / n_batches, 'epoch psnr': running_psnr / n_batches}, commit=False)
     # log_images(np.array([np_cvt_color(o) for o in out_sequence]), epoch, 'Video-Denoising',

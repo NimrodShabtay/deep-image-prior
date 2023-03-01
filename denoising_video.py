@@ -38,13 +38,15 @@ parser.add_argument('--batch_size', default=6, type=int)
 parser.add_argument('--ff_spatial_scale', default=6, type=int)
 parser.add_argument('--ff_temporal_scale', default=2, type=int)
 parser.add_argument('--noise_type', default='gaussian', type=str)
+parser.add_argument('--noise_sigma', default=25, type=int)
+
 
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
-sigma = 25
+sigma = args.noise_sigma
 mode = ['2d', '3d'][0]
 
 
@@ -105,6 +107,7 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            crop_shape=None,
                            batch_size=args.batch_size,
                            arch_mode=mode,
+                           noise_type=args.noise_type,
                            train=True,
                            temp_stride=1,
                            mode='cont')

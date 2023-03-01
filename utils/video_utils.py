@@ -148,6 +148,7 @@ class VideoDataset:
                 self.sampled_indices, self.degraded_images_vis = select_frames(self.degraded_images, factor=2)
             else:
                 self.sampled_indices = np.arange(0, self.n_frames)
+            # self.n_frames = self.images.shape[0]
 
     def get_cropped_video_dims(self):
         return self.crop_height, self.crop_width
