@@ -39,6 +39,7 @@ parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
 parser.add_argument('--noise_type', default='gaussian', type=str)
+parser.add_argument('--noise_sigma', default=25, type=int)
 
 
 args = parser.parse_args()
@@ -46,7 +47,7 @@ args = parser.parse_args()
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
-sigma = 25
+sigma = args.noise_sigma
 mode = ['2d', '3d'][0]
 
 

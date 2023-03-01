@@ -39,16 +39,18 @@ parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--freq_th', default=20, type=int)
-parser.add_argument('--noise_depth', default=32, type=int)
+parser.add_argument('--sigma', default=25, type=int)
 parser.add_argument('--a', default=1., type=float)
 parser.add_argument('--supervision', default='gaussian', type=str)
+parser.add_argument('--net_type', default='skip', type=str)
+
 
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
-sigma = 25
+sigma = args.sigma
 sigma_ = sigma/255.
 gaussian_a = args.a
 supervision_type = args.supervision_type
@@ -152,24 +154,31 @@ for fname in fnames_list:
         }
 
         if INPUT == 'noise':
-            input_depth = args.noise_depth
+            input_depth = 32
         elif INPUT == 'meshgrid':
             input_depth = 2
         else:
             input_depth = args.num_freqs * 4
 
-        net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-                      skip_n33d=128,
-                      skip_n33u=128,
-                      skip_n11=4,
-                      num_scales=5,
-                      act_fun='LeakyReLU',
-                      upsample_mode='bilinear').type(dtype)
-
-        # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
-        # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
-        #                 outermost_linear=True).type(dtype)
+        if args.net_type == 'skip':
+            net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                          skip_n33d=128,
+                          skip_n33u=128,
+                          skip_n11=4,
+                          num_scales=5,
+                          act_fun='LeakyReLU',
+                          upsample_mode='bilinear').type(dtype)
+        elif args.net_type == 'MLP':
+            net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
+        elif args.net_type == 'FCN':
+            net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+        elif args.net_type == 'SIREN':
+            net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+                            outermost_linear=True).type(dtype)
+        elif args.net_type == 'FCN_skip':
+            raise NotImplementedError('Implement')
+        else:
+            raise ValueError('net_type {} is not supported'.format(args.net_type))
     else:
         assert False
 
