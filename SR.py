@@ -7,12 +7,10 @@ import random
 import glob
 import wandb
 import time
-
-# from skimage.measure import compare_psnr
-from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from models.downsampler import Downsampler
 
 from utils.sr_utils import *
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 # Fix seeds
 seed = 0
@@ -173,7 +171,8 @@ for path_to_image in fnames_list:
                                                       freq_dict['cosine_only'])
         else:
             net_input = net_input_saved
-
+        # with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, with_flops=True) as prof:
+        #     with record_function("optimization"):
         out_HR = net(net_input)
         out_LR = downsampler(out_HR)
 
@@ -209,7 +208,9 @@ for path_to_image in fnames_list:
         if PLOT and i % show_every == 0:
             print('Iteration %05d    PSNR_LR %.3f   PSNR_HR %.3f' % (i, psnr_LR, psnr_HR))
             wandb.log({'psnr_hr': psnr_HR, 'psnr_lr': psnr_LR}, commit=False)
-            # out_HR_np = torch_to_np(out_HR)
+            # from flopth import flopth
+            # flops, params = flopth(net, in_size=((32, net_input.shape[-2], net_input.shape[-1]),))
+            # print(flops, params)            # out_HR_np = torch_to_np(out_HR)
             # plot_image_grid([imgs['HR_np'], imgs['bicubic_np'], np.clip(out_HR_np, 0, 1)], factor=13, nrow=3)
         i += 1
 
@@ -242,7 +243,7 @@ for path_to_image in fnames_list:
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
                      job_type='judo_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
                      group='SR - PIP (fbf)',
-                     mode='online',
+                     mode='offline',
                      save_code=True,
                      config=log_config,
                      notes=''

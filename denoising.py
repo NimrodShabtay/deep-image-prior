@@ -310,14 +310,15 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'ablation'],
+                           'denoising', 'ablation', args.net_type],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='Ablation_{}_{}_{}'.format(args.net_type, INPUT, LR),
-                     group='Denoising',
-                     mode='offline',
+                     job_type='Ablation_{}_{}_{}_{}_{}'.format(args.net_type, INPUT, LR,
+                                                               args.emb_size, args.num_layers),
+                     group='Denoising - Dataset',
+                     mode='online',
                      save_code=True,
                      config=log_config,
-                     notes=''
+                     notes='Embedding:{} # of Layers {}'.format(args.emb_size, args.num_layers)
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
