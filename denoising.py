@@ -21,7 +21,7 @@ import numpy as np
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark =True
+torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 
 # Fix seeds
@@ -43,7 +43,8 @@ parser.add_argument('--sigma', default=25, type=int)
 parser.add_argument('--a', default=1., type=float)
 parser.add_argument('--supervision', default='gaussian', type=str)
 parser.add_argument('--net_type', default='skip', type=str)
-
+parser.add_argument('--num_layers', default=5, type=int)
+parser.add_argument('--emb_size', default=128, type=int)
 
 args = parser.parse_args()
 
@@ -51,9 +52,9 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
 sigma = args.sigma
-sigma_ = sigma/255.
+sigma_ = sigma / 255.
 gaussian_a = args.a
-supervision_type = args.supervision_type
+supervision_type = args.supervision
 
 if args.index == -1:
     fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
@@ -150,33 +151,38 @@ for fname in fnames_list:
             'method': 'log',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
-            'base': 2 ** (adapt_lim / (args.num_freqs-1)),
+            'base': 2 ** (adapt_lim / (args.num_freqs - 1)),
         }
 
         if INPUT == 'noise':
             input_depth = 32
+            ksize=3
         elif INPUT == 'meshgrid':
             input_depth = 2
         else:
             input_depth = args.num_freqs * 4
+            ksize=1
 
         if args.net_type == 'skip':
             net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
                           skip_n33d=128,
-                          skip_n33u=128,
                           skip_n11=4,
                           num_scales=5,
                           act_fun='LeakyReLU',
                           upsample_mode='bilinear').type(dtype)
         elif args.net_type == 'MLP':
-            net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
+            net = MLP(input_depth, out_dim=output_depth,
+                      hidden_list=[args.emb_size for _ in range(args.num_layers)]).type(dtype)
         elif args.net_type == 'FCN':
-            net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+            net = FCN(input_depth, out_dim=output_depth,
+                      hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
         elif args.net_type == 'SIREN':
-            net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+            net = SirenConv(in_features=input_depth, hidden_features=args.emb_size, hidden_layers=args.num_layers,
+                            out_features=output_depth,
                             outermost_linear=True).type(dtype)
         elif args.net_type == 'FCN_skip':
-            raise NotImplementedError('Implement')
+            net = FCN_skip(input_depth, out_dim=output_depth,
+                           hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
         else:
             raise ValueError('net_type {} is not supported'.format(args.net_type))
     else:
@@ -207,6 +213,7 @@ for fname in fnames_list:
     t_fwd = []
     t_bwd = []
 
+
     def closure():
         global i, out_avg, psrn_noisy_last, last_net, net_input, psnr_gt_list, t_fwd, t_bwd
 
@@ -223,7 +230,7 @@ for fname in fnames_list:
             else:
                 net_input_ = net_input_saved
 
-            net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+            net_input = generate_fourier_feature_maps(net_input_, (img_pil.size[1], img_pil.size[0]), dtype)
 
         else:
             net_input = net_input_saved
@@ -252,12 +259,12 @@ for fname in fnames_list:
                 i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
             psnr_gt_list.append(psrn_gt)
             wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
-                                                      caption='step {}'.format(i))}, commit=False)
+                                              caption='step {}'.format(i))}, commit=False)
             # visualize_fourier(out[0].detach().cpu(), iter=i)
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
         if i % show_every:
-            if psrn_noisy - psrn_noisy_last < -2:
+            if psrn_noisy - psrn_noisy_last < -2 and last_net is not None:
                 print('Falling back to previous checkpoint.')
 
                 for new_param, net_param in zip(last_net, net.parameters()):
@@ -278,7 +285,6 @@ for fname in fnames_list:
 
         if i == num_iter - 2:
             wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
-
             if args.index == -2:
                 print(compare_psnr(img_np, out_np))
                 img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
@@ -286,6 +292,7 @@ for fname in fnames_list:
                 np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
 
         return total_loss
+
 
     log_config = {
         "learning_rate": LR,
@@ -296,18 +303,18 @@ for fname in fnames_list:
         'input type': INPUT,
         'Train input': train_input,
         'Reg. Noise STD': reg_noise_std,
-        'gaussian_a': gaussian_a
+        'Sigma': sigma
     }
     log_config.update(**freq_dict)
     filename = os.path.basename(fname).split('.')[0]
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'rebuttle'],
+                           'denoising', 'ablation'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='rollerblade_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
-                     group='Rebuttle - PIP video denoising (fbf)',
-                     mode='online',
+                     job_type='Ablation_{}_{}_{}'.format(args.net_type, INPUT, LR),
+                     group='Denoising',
+                     mode='offline',
                      save_code=True,
                      config=log_config,
                      notes=''

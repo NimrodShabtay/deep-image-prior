@@ -31,6 +31,8 @@ parser.add_argument('--freq_lim', default=8, type=int)
 parser.add_argument('--reg_noise_std', default=0.03, type=float)
 parser.add_argument('--dataset_index', default=0, type=int)
 parser.add_argument('--net_type', default='skip', type=str)
+parser.add_argument('--num_layers', default=5, type=int)
+parser.add_argument('--emb_size', default=128, type=int)
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -99,8 +101,10 @@ for path_to_image in fnames_list:
         input_depth = 2
     elif INPUT == 'noise':
         input_depth = 32
+        ksize=3
     else:
         input_depth = args.num_freqs * 4
+        ksize=1
 
     if factor == 4:
         num_iter = 2000
@@ -123,15 +127,20 @@ for path_to_image in fnames_list:
                       num_scales=5,
                       act_fun='LeakyReLU',
                       upsample_mode='bilinear').type(dtype)
+
     elif args.net_type == 'MLP':
-        net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
+        net = MLP(input_depth, out_dim=output_depth,
+                  hidden_list=[args.emb_size for _ in range(args.num_layers)]).type(dtype)
     elif args.net_type == 'FCN':
-        net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
+        net = FCN(input_depth, out_dim=output_depth,
+                  hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
     elif args.net_type == 'SIREN':
-        net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
+        net = SirenConv(in_features=input_depth, hidden_features=args.emb_size, hidden_layers=args.num_layers,
+                        out_features=output_depth,
                         outermost_linear=True).type(dtype)
     elif args.net_type == 'FCN_skip':
-        raise NotImplementedError('Implement')
+        net = FCN_skip(input_depth, out_dim=output_depth,
+                       hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
     else:
         raise ValueError('net_type {} is not supported'.format(args.net_type))
 
