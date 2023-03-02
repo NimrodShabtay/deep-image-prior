@@ -260,7 +260,7 @@ run = wandb.init(project="Fourier features DIP",
                        '{}-PIP'.format(mode)],
                  name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
-                 job_type='{}_{}_temp_ff-2'.format(INPUT, LR),
+                 job_type='{}_{}_random_phase'.format(INPUT, LR),
                  group='Spatial SR - Video',
                  mode='online',
                  save_code=True,

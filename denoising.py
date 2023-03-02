@@ -148,6 +148,7 @@ for fname in fnames_list:
         num_iter = 1801
         figsize = 4
         freq_dict = {
+            # 'method': 'perturbation',
             'method': 'log',
             'cosine_only': False,
             'n_freqs': args.num_freqs,
@@ -223,7 +224,11 @@ for fname in fnames_list:
             else:
                 net_input = net_input_saved
         elif INPUT == 'fourier':
-            net_input = net_input_saved
+            if freq_dict['method'] == 'perturbation':
+                net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
+                                                          False, reg_noise_std)
+            else:
+                net_input = net_input_saved
         elif INPUT == 'infer_freqs':
             if reg_noise_std > 0:
                 net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
@@ -310,9 +315,10 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'pertubation'],
+                           'denoising', 'random_phase', '{}'.format(args.net_type)],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='Pertubation_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     job_type='random_phase_{}_{}_{}_{}_{}'.format(
+                         INPUT, LR, args.net_type, args.emb_size, args.num_layers),
                      group='Denoising',
                      mode='online',
                      save_code=True,
@@ -345,9 +351,9 @@ for fname in fnames_list:
     # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
     #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
-    if INPUT == 'infer_freqs':
+    if INPUT == 'infer_freqs' or freq_dict['method'] == 'perturbation':
         net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
-                                                  only_cosine=freq_dict['cosine_only'])
+                                                  only_cosine=freq_dict['cosine_only'], pertubation_std=0.0)
         if train_input:
             log_inputs(net_input)
     else:
