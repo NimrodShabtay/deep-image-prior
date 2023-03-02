@@ -5,7 +5,7 @@ from .unet import UNet
 from .positional_encoding_net import PENet
 import torch.nn as nn
 from .mlp import MLP
-from .simple_fcn import FCN
+from .simple_fcn import FCN, FCN_skip
 from .relu_net import ReLUNet
 from .siren import SirenConv
 
