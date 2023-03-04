@@ -19,7 +19,6 @@ import numpy as np
 import tqdm
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
-
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
@@ -45,8 +44,6 @@ imsize = -1
 PLOT = True
 sigma = 25
 mode = ['2d', '3d'][0]
-
-signal.signal(signal.SIGTERM, graceful_exit_handler)
 
 
 def eval_video(val_dataset, model, epoch):
@@ -75,7 +72,7 @@ def eval_video(val_dataset, model, epoch):
             out_rgb = np.array([np_cvt_color(o) for o in out_np])
             img_for_video[batch_data['cur_batch']] = (out_rgb * 255).astype(np.uint8)
 
-    ignore_start_ind = vid_dataset_eval.n_batches * vid_dataset_eval.batch_size
+    ignore_start_ind = val_dataset.n_batches * val_dataset.batch_size
     psnr_whole_video = compare_psnr(val_dataset.get_all_gt(numpy=True)[:ignore_start_ind],
                                     img_for_psnr[:ignore_start_ind])
     ssim_whole_video = ssim_loss(
@@ -135,8 +132,8 @@ LR = args.learning_rate
 OPTIMIZER = 'adam'  # 'LBFGS'
 exp_weight = 0.99
 if mode == '2d':
-    show_every = 300
-    n_epochs = 10000
+    show_every = 300  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
+    n_epochs = 6000  # * (vid_dataset.n_frames // vid_dataset.batch_size + 1)
 
 
 num_iter = 1
@@ -247,24 +244,16 @@ log_config = {
 }
 log_config.update(**vid_dataset.freq_dict)
 filename = os.path.basename(args.input_vid_path).split('.')[0]
-
-if os.path.isfile(CHECKPOINT_NAME):
-    net, optimizer, start_epoch, wandb_id = resume_run(net, optimizer)
-else:
-    start_epoch = 0
-    wandb_id = wandb.util.generate_id()
-
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
                        '{}-PIP'.format(mode)],
                  name='{}_depth_{}_{}_{}_spatial_factor_{}_temporal_factor_{}'.format(
                      filename, input_depth, '{}'.format(INPUT), mode, spatial_factor, temporal_factor),
-                 job_type='{}_{}_temp_ff-2'.format(INPUT, LR),
+                 job_type='{}_{}'.format(INPUT, LR),
                  group='Spatial SR - Video',
                  mode='online',
                  save_code=True,
-                 id=wandb_id,
                  resume="allow",
                  config=log_config,
                  notes=''
@@ -281,7 +270,7 @@ downsampler = DownsamplingSequence(factor=spatial_factor)
 downsampler.set_dtype(dtype)
 
 
-for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
+for epoch in tqdm.tqdm(range(0, n_epochs), desc='Epoch', position=0):
     running_psnr = 0.
     running_loss = 0.
     vid_dataset.init_batch_list()
@@ -297,14 +286,14 @@ for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc='Epoch', position=0):
 
     denom = n_batches
     # Log metrics for each epoch
-    wandb.log({'epoch loss': running_loss / denom, 'epoch psnr': running_psnr / denom}, commit=False)
+    wandb.log({'epoch loss': running_loss / n_batches, 'epoch psnr': running_psnr / n_batches}, commit=False)
     # log_images(np.array([np_cvt_color(o) for o in out_sequence]), epoch, 'Video-Denoising',
     #            commit=False)
 
     # Infer video:
     if epoch % show_every == 0:
-        eval_video(vid_dataset_eval, net, epoch)
+        eval_video(vid_dataset, net, epoch)
 
 
 # Infer video at the end:
-eval_video(vid_dataset_eval, net, epoch)
+eval_video(vid_dataset, net, epoch)

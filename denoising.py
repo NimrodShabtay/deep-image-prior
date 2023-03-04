@@ -156,13 +156,12 @@ for fname in fnames_list:
 
         if INPUT == 'noise':
             input_depth = 32
-            ksize=3
         elif INPUT == 'meshgrid':
             input_depth = 2
         else:
             input_depth = args.num_freqs * 4
-            ksize=1
 
+        ksize = 3
         if args.net_type == 'skip':
             net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
                           skip_n33d=128,
@@ -310,10 +309,9 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', 'ablation', args.net_type],
+                           'denoising', supervision_type, args.net_type, str(sigma)],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='Ablation_{}_{}_{}_{}_{}'.format(args.net_type, INPUT, LR,
-                                                               args.emb_size, args.num_layers),
+                     job_type='{}_{}_{}_{}'.format(args.net_type, INPUT, LR, supervision_type),
                      group='Denoising - Dataset',
                      mode='online',
                      save_code=True,

@@ -99,11 +99,10 @@ for path_to_image in fnames_list:
         input_depth = 2
     elif INPUT == 'noise':
         input_depth = 32
-        ksize=3
     else:
         input_depth = args.num_freqs * 4
-        ksize=1
 
+    ksize = 3
     if factor == 4:
         num_iter = 2000
         reg_noise_std = 0.03
@@ -119,10 +118,10 @@ for path_to_image in fnames_list:
 
     if args.net_type == 'skip':
         net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
-                      skip_n33d=128,
-                      skip_n33u=128,
+                      skip_n33d=args.emb_size,
+                      skip_n33u=args.emb_size,
                       skip_n11=4,
-                      num_scales=5,
+                      num_scales=args.num_layers,
                       act_fun='LeakyReLU',
                       upsample_mode='bilinear').type(dtype)
 
@@ -239,11 +238,12 @@ for path_to_image in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                            'freq_lim: {}'.format(args.freq_lim), 'sr', dataset_tag],
+                            'freq_lim: {}'.format(args.freq_lim), 'sr', dataset_tag, args.net_type],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='judo_{}_{}_{}'.format(INPUT, LR, args.num_freqs),
-                     group='SR - PIP (fbf)',
-                     mode='offline',
+                     job_type='Ablation_{}_{}_{}_{}_{}'.format(args.net_type, INPUT, LR,
+                                                               args.emb_size, args.num_layers),
+                     group='Super-Resolution - Dataset x4',
+                     mode='online',
                      save_code=True,
                      config=log_config,
                      notes=''
