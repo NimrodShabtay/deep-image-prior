@@ -54,38 +54,38 @@ gaussian_a = args.a
 supervision_type = args.supervision_type
 
 
-class EWMVar():
-    def __init__(self, alpha, p):
-        self.alpha = alpha
-        self.patience = p
+class EarlyStop:
+    def __init__(self, size, patience):
+        self.patience = patience
         self.wait_count = 0
-        self.best_emv = float('inf')
+        self.best_score = float('inf')
         self.best_epoch = 0
+        self.img_collection = []
         self.stop = False
-        self.ema = None
-        self.emv = None
+        self.size = size
 
-    def check_stop(self, cur_epoch):
-        # stop when EMV doesn't decrease for consecutive P(patience) times
-        if self.emv < self.best_emv:
-            self.best_emv = self.emv
+    def check_stop(self, current, cur_epoch):
+      #stop when variance doesn't decrease for consecutive P(patience) times
+        if current < self.best_score:
+            self.best_score = current
             self.best_epoch = cur_epoch
             self.wait_count = 0
+            should_stop = False
         else:
             self.wait_count += 1
-            self.stop = self.wait_count >= self.patience
+            should_stop = self.wait_count >= self.patience
+        return should_stop
 
-    def update_av(self, cur_img, cur_epoch):
-        #initialization
-        if cur_epoch == 0:
-            self.ema = cur_img
-            self.emv = 0
-        #update
-        else:
-            delta = cur_img - self.ema
-            tmp_ema = self.ema + self.alpha * delta
-            self.ema = np.clip(tmp_ema,0,1)
-            self.emv = (1 - self.alpha) * (self.emv + self.alpha * (np.linalg.norm(delta) ** 2))
+    def update_img_collection(self, cur_img):
+        self.img_collection.append(cur_img)
+        if len(self.img_collection) > self.size:
+            self.img_collection.pop(0)
+
+    def get_img_collection(self):
+        return self.img_collection
+
+def myMetric(x1, x2):
+    return ((x1 - x2) ** 2).sum() / x1.size
 
 
 if args.index == -1:
@@ -150,13 +150,12 @@ for fname in fnames_list:
     loss_history = []
     psnr_history = []
     ssim_history = []
-    ema_psnr_his = []
-    ema_ssim_his = []
-    emv_history = []
+    variance_history = []
     x_axis = []
+    buffer_size = 100
     patience = 1000
-    alpha = 0.1
-    ewmvar = EWMVar(alpha=alpha, p=patience)
+    earlystop = EarlyStop(size=buffer_size, patience=patience)
+
 
     OPTIMIZER = 'adam'  # 'LBFGS'
     show_every = 100
@@ -179,14 +178,6 @@ for fname in fnames_list:
         net = net.type(dtype)
 
     elif fname in fnames:
-        # img_f = rfft2(img_noisy_torch, norm='ortho')
-        # mag_img_f = torch.abs(img_f).cpu()
-        # bins = torch.Tensor([torch.Tensor([0]), *list(2 ** torch.linspace(0, args.freq_lim - 1, args.num_freqs))])
-        # hist = torch.histogram(mag_img_f, bins=bins)
-        # if hist.hist[-4:].sum() > args.freq_th:
-        #     adapt_lim = 8
-        # else:
-        #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
         num_iter = 1801
@@ -212,11 +203,6 @@ for fname in fnames_list:
                       num_scales=5,
                       act_fun='LeakyReLU',
                       upsample_mode='bilinear').type(dtype)
-
-        # net = MLP(input_depth, out_dim=output_depth, hidden_list=[256 for _ in range(10)]).type(dtype)
-        # net = FCN(input_depth, out_dim=output_depth, hidden_list=[256, 256, 256, 256]).type(dtype)
-        # net = SirenConv(in_features=input_depth, hidden_features=256, hidden_layers=3, out_features=output_depth,
-        #                 outermost_linear=True).type(dtype)
     else:
         assert False
 
@@ -287,19 +273,20 @@ for fname in fnames_list:
         psnr_history.append(psrn_gt)
         # variance hisotry
         r_img_np = out_np.reshape(-1)
-        ewmvar.update_av(r_img_np, i)
-
-        tmp_ema = (ewmvar.ema).reshape(img_np.shape)
-        ema_psnr = compare_psnr(img_np, tmp_ema)
-        # ema_ssim = compare_psnr(np.transpose(img_np, (1, 2, 0)),
-        #                                                  np.transpose(tmp_ema, (1, 2, 0)), multichannel=True)
-        ema_psnr_his.append(ema_psnr)
-        # ema_ssim_his.append(ema_ssim)
-        if i > 100:
-            emv_history.append(ewmvar.emv)
-            x_axis.append(i)
-            if ewmvar.stop == False:
-                ewmvar.check_stop(i)
+        r_img_np = r_img_np.reshape(-1)
+        earlystop.update_img_collection(r_img_np)
+        img_collection = earlystop.get_img_collection()
+        if len(img_collection) == buffer_size:
+            ave_img = np.mean(img_collection, axis=0)
+            variance = []
+            for tmp in img_collection:
+                variance.append(myMetric(ave_img, tmp))
+            cur_var = np.mean(variance)
+            cur_epoch = i
+            variance_history.append(cur_var)
+            x_axis.append(cur_epoch)
+            if earlystop.stop == False:
+                earlystop.stop = earlystop.check_stop(cur_var, cur_epoch)
 
         if PLOT and i % show_every == 0:
             print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
@@ -357,7 +344,7 @@ for fname in fnames_list:
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
                            'denoising', 'early_stopping'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='EMV_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     job_type='WMV_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
                      group='Early Stopping',
                      mode='online',
                      save_code=True,
@@ -391,17 +378,17 @@ for fname in fnames_list:
     color = 'tab:red'
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('PSNR', color=color)
-    ax1.plot(ema_psnr_his, color=color)
+    ax1.plot(psnr_history, color=color)
     ax1.tick_params(axis='y', labelcolor=color)
     ax2 = ax1.twinx()
 
     color = 'tab:blue'
     ax2.set_ylabel('Variance', color=color)
-    ax2.plot(x_axis, emv_history, color=color)
+    ax2.plot(x_axis, variance_history, color=color)
     ax2.tick_params(axis='y', labelcolor=color)
-    plt.title('{} ES-EMV (ES: {:.3f}, 1800: {:.3f})'.format(fname, psnr_history[int(ewmvar.best_epoch)],
+    plt.title('{} ES-EMV (ES: {:.3f}, 1800: {:.3f})'.format(fname, psnr_history[int(earlystop.best_epoch)],
                                                             psnr_history[1799]))
-    plt.axvline(x=ewmvar.best_epoch, label='detection', color='y')
+    plt.axvline(x=earlystop.best_epoch, label='detection', color='y')
     plt.legend()
     fig.tight_layout()
     plt.show()
@@ -410,8 +397,8 @@ for fname in fnames_list:
     # Now we can save it to a numpy array.
     data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    wandb.log({'Early Stopping (EMV)': wandb.Image(data)})
-    wandb.log({'EMV best epoch': int(ewmvar.best_epoch), 'EMV best PSNR': psnr_history[int(ewmvar.best_epoch)],
+    wandb.log({'Early Stopping (WMV)': wandb.Image(data)})
+    wandb.log({'WMV best epoch': int(earlystop.best_epoch), 'WMV best PSNR': psnr_history[int(earlystop.best_epoch)],
               '1800 PSNR': psnr_history[1799]})
     plt.close(fig)
 

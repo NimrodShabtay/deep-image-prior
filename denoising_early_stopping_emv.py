@@ -1,0 +1,418 @@
+from __future__ import print_function
+
+import glob
+import random
+import time
+
+from models import *
+from utils.denoising_utils import *
+from utils.wandb_utils import *
+from utils.freq_utils import *
+from utils.common_utils import compare_psnr_y
+
+import torch.optim
+import matplotlib.pyplot as plt
+
+import os
+import wandb
+import argparse
+import numpy as np
+# from skimage.measure import compare_psnr
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
+
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark =True
+dtype = torch.cuda.FloatTensor
+
+# Fix seeds
+seed = 0
+random.seed(seed)
+np.random.seed(seed)
+torch.random.manual_seed(seed)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--gpu', default='0')
+parser.add_argument('--index', default=0, type=int)
+parser.add_argument('--input_index', default=0, type=int)
+parser.add_argument('--dataset_index', default=0, type=int)
+parser.add_argument('--learning_rate', default=0.01, type=float)
+parser.add_argument('--num_freqs', default=8, type=int)
+parser.add_argument('--freq_lim', default=8, type=int)
+parser.add_argument('--freq_th', default=20, type=int)
+parser.add_argument('--noise_depth', default=32, type=int)
+parser.add_argument('--a', default=1., type=float)
+parser.add_argument('--supervision_type', default='gaussian', type=str)
+
+args = parser.parse_args()
+
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+imsize = -1
+PLOT = True
+sigma = 25
+sigma_ = sigma/255.
+gaussian_a = args.a
+supervision_type = args.supervision_type
+
+
+class EWMVar():
+    def __init__(self, alpha, p):
+        self.alpha = alpha
+        self.patience = p
+        self.wait_count = 0
+        self.best_emv = float('inf')
+        self.best_epoch = 0
+        self.stop = False
+        self.ema = None
+        self.emv = None
+
+    def check_stop(self, cur_epoch):
+        # stop when EMV doesn't decrease for consecutive P(patience) times
+        if self.emv < self.best_emv:
+            self.best_emv = self.emv
+            self.best_epoch = cur_epoch
+            self.wait_count = 0
+        else:
+            self.wait_count += 1
+            self.stop = self.wait_count >= self.patience
+
+    def update_av(self, cur_img, cur_epoch):
+        #initialization
+        if cur_epoch == 0:
+            self.ema = cur_img
+            self.emv = 0
+        #update
+        else:
+            delta = cur_img - self.ema
+            tmp_ema = self.ema + self.alpha * delta
+            self.ema = np.clip(tmp_ema,0,1)
+            self.emv = (1 - self.alpha) * (self.emv + self.alpha * (np.linalg.norm(delta) ** 2))
+
+
+if args.index == -1:
+    fnames = sorted(glob.glob('data/denoising_dataset/*.*'))
+    fnames_list = fnames
+    if args.dataset_index != -1:
+        fnames_list = fnames[args.dataset_index:args.dataset_index + 1]
+elif args.index == -2:
+    base_path = './data/videos/rollerblade'
+    save_dir = 'plots/{}/denoising_pip'.format(base_path.split('/')[-1])
+    os.makedirs(save_dir, exist_ok=True)
+    fnames = sorted(glob.glob(base_path + '/*.*'))
+    fnames_list = fnames
+else:
+    fnames = ['data/denoising/F16_GT.png', 'data/inpainting/kate.png', 'data/inpainting/vase.png',
+              'data/sr/zebra_GT.png', 'data/denoising/synthetic_img.png', 'data/denoising/synthetic3_img_600.png',
+              'data/denoising/synthetic4_img_600.png']
+    fnames_list = [fnames[args.index]]
+
+training_times = []
+for fname in fnames_list:
+    if fname == 'data/denoising/snail.jpg':
+        img_noisy_pil = crop_image(get_image(fname, imsize)[0], d=32)
+        img_noisy_np = pil_to_np(img_noisy_pil)
+
+        # As we don't have ground truth
+        img_pil = img_noisy_pil
+        img_np = img_noisy_np
+
+        if PLOT:
+            plot_image_grid([img_np], 4, 5)
+
+    elif fname in fnames:
+        img_pil = crop_image(get_image(fname, imsize)[0], d=32)
+        img_np = pil_to_np(img_pil)
+        output_depth = img_np.shape[0]
+
+        if supervision_type == 'gaussian':
+            img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
+        elif supervision_type == 'poisson':
+            img_noisy_pil, img_noisy_np = get_poisson_image(img_np)
+        elif supervision_type == 'fit':
+            img_noisy_pil, img_noisy_np = img_pil, img_np
+        else:
+            raise ValueError('Supervision type not supported {}'.format(supervision_type))
+
+    else:
+        assert False
+
+    INPUT = ['noise', 'fourier', 'meshgrid', 'infer_freqs'][args.input_index]
+    pad = 'reflection'
+    if INPUT == 'infer_freqs':
+        OPT_OVER = 'net,input'
+    else:
+        OPT_OVER = 'net'
+
+    train_input = True if ',' in OPT_OVER else False
+    reg_noise_std = 1. / 30.  # set to 1./20. for sigma=50
+    LR = args.learning_rate
+
+    # show_every = 1
+    loss_history = []
+    psnr_history = []
+    ssim_history = []
+    ema_psnr_his = []
+    ema_ssim_his = []
+    emv_history = []
+    x_axis = []
+    patience = 1000
+    alpha = 0.1
+    ewmvar = EWMVar(alpha=alpha, p=patience)
+
+    OPTIMIZER = 'adam'  # 'LBFGS'
+    show_every = 100
+    exp_weight = 0.99
+
+    img_noisy_torch = np_to_torch(img_noisy_np).type(dtype)
+    if fname == 'data/denoising/snail.jpg':
+        num_iter = 2400
+        input_depth = 3
+        figsize = 5
+
+        net = skip(
+            input_depth, 3,
+            num_channels_down=[8, 16, 32, 64, 128],
+            num_channels_up=[8, 16, 32, 64, 128],
+            num_channels_skip=[0, 0, 0, 4, 4],
+            upsample_mode='bilinear',
+            need_sigmoid=True, need_bias=True, pad=pad, act_fun='LeakyReLU')
+
+        net = net.type(dtype)
+
+    elif fname in fnames:
+        adapt_lim = args.freq_lim
+
+        num_iter = 1801
+        figsize = 4
+        freq_dict = {
+            'method': 'log',
+            'cosine_only': False,
+            'n_freqs': args.num_freqs,
+            'base': 2 ** (adapt_lim / (args.num_freqs-1)),
+        }
+
+        if INPUT == 'noise':
+            input_depth = args.noise_depth
+        elif INPUT == 'meshgrid':
+            input_depth = 2
+        else:
+            input_depth = args.num_freqs * 4
+
+        net = get_net(input_depth, 'skip', pad, n_channels=output_depth,
+                      skip_n33d=128,
+                      skip_n33u=128,
+                      skip_n11=4,
+                      num_scales=5,
+                      act_fun='LeakyReLU',
+                      upsample_mode='bilinear').type(dtype)
+
+    else:
+        assert False
+
+    net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
+
+    # Compute number of parameters
+    s = sum([np.prod(list(p.size())) for p in net.parameters()])
+    print('Number of params: %d' % s)
+
+    # Loss
+    mse = torch.nn.MSELoss().type(dtype)
+
+    if train_input:
+        net_input_saved = net_input
+    else:
+        net_input_saved = net_input.detach().clone()
+
+    noise = torch.rand_like(net_input) if INPUT == 'infer_freqs' else net_input.detach().clone()
+
+    out_avg = None
+    last_net = None
+    psrn_noisy_last = 0
+    psnr_gt_list = []
+    i = 0
+    input_grads = {idx: [] for idx in range(net_input_saved.shape[0])}
+    t_fwd = []
+    t_bwd = []
+
+    def closure():
+        global i, out_avg, psrn_noisy_last, last_net, net_input, psnr_gt_list, t_fwd, t_bwd
+
+        if INPUT == 'noise':
+            if reg_noise_std > 0:
+                net_input = net_input_saved + (noise.normal_() * reg_noise_std)
+            else:
+                net_input = net_input_saved
+        elif INPUT == 'fourier':
+            net_input = net_input_saved
+        elif INPUT == 'infer_freqs':
+            if reg_noise_std > 0:
+                net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
+            else:
+                net_input_ = net_input_saved
+
+            net_input = generate_fourier_feature_maps(net_input_,  (img_pil.size[1], img_pil.size[0]), dtype)
+
+        else:
+            net_input = net_input_saved
+
+        t_s = time.time()
+        out = net(net_input)
+        t_fwd.append(time.time() - t_s)
+        # Smoothing
+        if out_avg is None:
+            out_avg = out.detach()
+        else:
+            out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
+
+        total_loss = mse(out, img_noisy_torch)
+        t_s = time.time()
+        total_loss.backward()
+        t_bwd.append(time.time() - t_s)
+
+        out_np = out.detach().cpu().numpy()[0]
+        psrn_noisy = compare_psnr(img_noisy_np, out_np)
+        psrn_gt = compare_psnr(img_np, out_np)
+        psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0])
+        psnr_history.append(psrn_gt)
+        # variance hisotry
+        r_img_np = out_np.reshape(-1)
+        ewmvar.update_av(r_img_np, i)
+
+        tmp_ema = (ewmvar.ema).reshape(img_np.shape)
+        ema_psnr = compare_psnr(img_np, tmp_ema)
+        # ema_ssim = compare_psnr(np.transpose(img_np, (1, 2, 0)),
+        #                                                  np.transpose(tmp_ema, (1, 2, 0)), multichannel=True)
+        ema_psnr_his.append(ema_psnr)
+        # ema_ssim_his.append(ema_ssim)
+        if i > 100:
+            emv_history.append(ewmvar.emv)
+            x_axis.append(i)
+            if ewmvar.stop == False:
+                ewmvar.check_stop(i)
+
+        if PLOT and i % show_every == 0:
+            print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
+                i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
+            psnr_gt_list.append(psrn_gt)
+            wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
+                                                      caption='step {}'.format(i))}, commit=False)
+            # visualize_fourier(out[0].detach().cpu(), iter=i)
+            wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
+        # Backtracking
+        if i % show_every:
+            if psrn_noisy - psrn_noisy_last < -2:
+                print('Falling back to previous checkpoint.')
+
+                for new_param, net_param in zip(last_net, net.parameters()):
+                    net_param.data.copy_(new_param.cuda())
+
+                return total_loss * 0
+            else:
+                last_net = [x.detach().cpu() for x in net.parameters()]
+                psrn_noisy_last = psrn_noisy
+
+        i += 1
+
+        # Log metrics
+        if INPUT == 'infer_freqs':
+            visualize_learned_frequencies(net_input_saved)
+
+        wandb.log({'training loss': total_loss.item()}, commit=True)
+
+        if i == num_iter - 2:
+            if args.index == -2:
+                print(compare_psnr(img_np, out_np))
+                img_final_pil = np_to_pil(np.clip(out_np, 0, 1))
+                img_final_pil.save(os.path.join(save_dir, filename + '.png'))
+                np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
+
+        return total_loss
+
+    log_config = {
+        "learning_rate": LR,
+        "epochs": num_iter,
+        'optimizer': OPTIMIZER,
+        'loss': type(mse).__name__,
+        'input depth': input_depth,
+        'input type': INPUT,
+        'Train input': train_input,
+        'Reg. Noise STD': reg_noise_std,
+        'gaussian_a': gaussian_a
+    }
+    log_config.update(**freq_dict)
+    filename = os.path.basename(fname).split('.')[0]
+    run = wandb.init(project="Fourier features DIP",
+                     entity="impliciteam",
+                     tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
+                           'denoising', 'early_stopping'],
+                     name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
+                     job_type='EMV_{}_{}_{}_{}'.format(INPUT, LR, args.num_freqs, adapt_lim),
+                     group='Early Stopping',
+                     mode='online',
+                     save_code=True,
+                     config=log_config,
+                     notes=''
+                     )
+
+    wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
+    log_input_images(img_noisy_np, img_np)
+    # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
+    print('Number of params: %d' % s)
+    print(net)
+    p = get_params(OPT_OVER, net, net_input)
+
+    t = time.time()
+    optimize(OPTIMIZER, p, closure, LR, num_iter)
+    t_training = time.time() - t
+    training_times.append(t_training)
+    fig, ax1 = plt.subplots()
+
+    color = 'tab:red'
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('PSNR', color=color)
+    ax1.plot(ema_psnr_his, color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax2 = ax1.twinx()
+
+    color = 'tab:blue'
+    ax2.set_ylabel('Variance', color=color)
+    ax2.plot(x_axis, emv_history, color=color)
+    ax2.tick_params(axis='y', labelcolor=color)
+    plt.title('{} ES-EMV (ES: {:.3f}, 1800: {:.3f})'.format(fname, psnr_history[int(ewmvar.best_epoch)],
+                                                            psnr_history[1799]))
+    plt.axvline(x=ewmvar.best_epoch, label='detection', color='y')
+    plt.legend()
+    fig.tight_layout()
+    plt.show()
+
+    fig.canvas.draw()
+    # Now we can save it to a numpy array.
+    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    wandb.log({'Early Stopping (EMV)': wandb.Image(data)})
+    wandb.log({'EMV best epoch': int(ewmvar.best_epoch), 'EMV best PSNR': psnr_history[int(ewmvar.best_epoch)],
+              '1800 PSNR': psnr_history[1799]})
+    plt.close(fig)
+
+    print('Training time: {}'.format(t_training))
+    # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
+    #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
+
+    if INPUT == 'infer_freqs':
+        net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
+                                                  only_cosine=freq_dict['cosine_only'])
+        if train_input:
+            log_inputs(net_input)
+    else:
+        net_input = net_input_saved
+
+    out_np = torch_to_np(net(net_input))
+    print('avg. training time - {}'.format(np.mean(training_times)))
+    log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
+    wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
+    wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
+
+    q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
+    plt.plot(psnr_gt_list)
+    plt.title('max: {}\nlast: {}'.format(max(psnr_gt_list), psnr_gt_list[-1]))
+    plt.show()
+    run.finish()
