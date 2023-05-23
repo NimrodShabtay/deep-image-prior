@@ -19,7 +19,7 @@ import argparse
 import numpy as np
 # from skimage.measure import compare_psnr
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
-
+from torch.profiler import profile, record_function, ProfilerActivity
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
@@ -45,6 +45,12 @@ parser.add_argument('--supervision', default='gaussian', type=str)
 parser.add_argument('--net_type', default='skip', type=str)
 parser.add_argument('--num_layers', default=5, type=int)
 parser.add_argument('--emb_size', default=128, type=int)
+parser.add_argument('--exp_weight', default=0.99, type=float)
+parser.add_argument('--reg_noise_std', default=1./30, type=float)
+parser.add_argument('--n_iter', default=1801, type=int)
+parser.add_argument('--win_len', default=100, type=int)
+parser.add_argument('--batch_size', default=1, type=int)
+
 
 args = parser.parse_args()
 
@@ -111,12 +117,12 @@ for fname in fnames_list:
         OPT_OVER = 'net'
 
     train_input = True if ',' in OPT_OVER else False
-    reg_noise_std = 1. / 30.  # set to 1./20. for sigma=50
+    reg_noise_std = args.reg_noise_std #1. / 30.  # set to 1./20. for sigma=50
     LR = args.learning_rate
 
     OPTIMIZER = 'adam'  # 'LBFGS'
     show_every = 100
-    exp_weight = 0.99
+    exp_weight = args.exp_weight
 
     img_noisy_torch = np_to_torch(img_noisy_np).type(dtype)
     if fname == 'data/denoising/snail.jpg':
@@ -145,7 +151,7 @@ for fname in fnames_list:
         #     adapt_lim = 7
         adapt_lim = args.freq_lim
 
-        num_iter = 1801
+        num_iter = args.n_iter
         figsize = 4
         freq_dict = {
             'method': 'log',
@@ -175,6 +181,9 @@ for fname in fnames_list:
         elif args.net_type == 'FCN':
             net = FCN(input_depth, out_dim=output_depth,
                       hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
+        elif args.net_type == 'SimpleFCN':
+            net = SimpleFCN(input_depth, out_dim=output_depth,
+                            hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
         elif args.net_type == 'SIREN':
             net = SirenConv(in_features=input_depth, hidden_features=args.emb_size, hidden_layers=args.num_layers,
                             out_features=output_depth,
@@ -187,7 +196,8 @@ for fname in fnames_list:
     else:
         assert False
 
-    net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict).type(dtype)
+    net_input = get_input(input_depth, INPUT, (img_pil.size[1], img_pil.size[0]), freq_dict=freq_dict,
+                          batch_size=args.batch_size).type(dtype)
 
     # Compute number of parameters
     s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -207,14 +217,20 @@ for fname in fnames_list:
     last_net = None
     psrn_noisy_last = 0
     psnr_gt_list = []
+    psnr_gt_sm_list = []
     i = 0
     input_grads = {idx: [] for idx in range(net_input_saved.shape[0])}
     t_fwd = []
     t_bwd = []
+    win_len = args.win_len
+    # frames_window = torch.zeros((win_len, 3, img_pil.size[1], img_pil.size[0])).type(dtype)
+
+    def push_to_window(tensor, x):
+        return torch.cat((tensor[1:], x), dim=0)
 
 
     def closure():
-        global i, out_avg, psrn_noisy_last, last_net, net_input, psnr_gt_list, t_fwd, t_bwd
+        global i, out_avg, psrn_noisy_last, last_net, net_input, psnr_gt_list, t_fwd, t_bwd, frames_window
 
         if INPUT == 'noise':
             if reg_noise_std > 0:
@@ -222,7 +238,13 @@ for fname in fnames_list:
             else:
                 net_input = net_input_saved
         elif INPUT == 'fourier':
-            net_input = net_input_saved
+            # net_input = net_input_saved
+            net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
+            # net_input_ = net_input_saved + \
+            #              (torch.ones_like(net_input_saved).uniform_(-torch.pi, torch.pi) * reg_noise_std)
+            vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
+            net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)#.type(dtype)
+
         elif INPUT == 'infer_freqs':
             if reg_noise_std > 0:
                 net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
@@ -235,32 +257,46 @@ for fname in fnames_list:
             net_input = net_input_saved
 
         t_s = time.time()
+
         out = net(net_input)
+        # frames_window = push_to_window(frames_window, out.detach())
+
         t_fwd.append(time.time() - t_s)
         # Smoothing
-        if out_avg is None:
+        if out_avg is None or i <= win_len:
             out_avg = out.detach()
         else:
             out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
+            # out_avg = torch.mean(frames_window, dim=0).unsqueeze(0)
 
-        total_loss = mse(out, img_noisy_torch)
+
+        total_loss = mse(out, img_noisy_torch.repeat(args.batch_size, 1, 1, 1))
         t_s = time.time()
         total_loss.backward()
         t_bwd.append(time.time() - t_s)
 
-        out_np = out.detach().cpu().numpy()[0]
+        # out_np = out.detach().cpu().numpy()[0]
+        # psrn_gt = compare_psnr(img_np, out_np)
+        psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0])
+        out_np_batch = net(net_input).detach().cpu().numpy()
+        out_np = np.mean(out_np_batch, axis=0)
         psrn_noisy = compare_psnr(img_noisy_np, out_np)
         psrn_gt = compare_psnr(img_np, out_np)
-        psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0])
+
 
         if PLOT and i % show_every == 0:
             print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
                 i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
-            psnr_gt_list.append(psrn_gt)
-            wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
-                                              caption='step {}'.format(i))}, commit=False)
+            # wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
+            #                                   caption='step {}'.format(i))}, commit=False)
+            # wandb.log({'Fitting-Smooth': wandb.Image(np.clip(np.transpose(out_avg.detach().cpu().numpy()[0],
+            #                                                               (1, 2, 0)), 0, 1),
+            #                                          caption='step {}'.format(i))}, commit=False)
             # visualize_fourier(out[0].detach().cpu(), iter=i)
-            wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
+            wandb.log({'mean_inference_psnr_gt': psrn_gt,
+                       **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
+                          for i in range(out_np_batch.shape[0])}}, commit=False)
+            # wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
         if i % show_every:
             if psrn_noisy - psrn_noisy_last < -2 and last_net is not None:
@@ -273,6 +309,8 @@ for fname in fnames_list:
             else:
                 last_net = [x.detach().cpu() for x in net.parameters()]
                 psrn_noisy_last = psrn_noisy
+                psnr_gt_list.append(psrn_gt)
+                psnr_gt_sm_list.append(psrn_gt_sm)
 
         i += 1
 
@@ -309,18 +347,18 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', supervision_type, args.net_type, str(sigma)],
+                           'denoising', supervision_type, args.net_type, str(sigma), 'Exp.-smoothing'],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_{}'.format(args.net_type, INPUT, LR, supervision_type),
+                     job_type='{}_{}_{}_{}_{}'.format(args.net_type, INPUT, LR, supervision_type, args.win_len),
                      group='Denoising - Dataset',
                      mode='online',
                      save_code=True,
                      config=log_config,
-                     notes='Embedding:{} # of Layers {}'.format(args.emb_size, args.num_layers)
+                     notes='Exponential Smoothing - window length {}'.format(win_len)
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
-    log_input_images(img_noisy_np, img_np)
+    # log_input_images(img_noisy_np, img_np)
     # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
     print('Number of params: %d' % s)
     print(net)
@@ -344,6 +382,11 @@ for fname in fnames_list:
     # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
     #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
+    with open(f"results_pip_gt.csv", "a") as f:
+        f.write(','.join(str(x) for x in psnr_gt_list) + '\n')
+    with open(f"results_pip_gt_smooth.csv", "a") as f:
+        f.write(','.join(str(x) for x in psnr_gt_sm_list) + '\n')
+
     if INPUT == 'infer_freqs':
         net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
                                                   only_cosine=freq_dict['cosine_only'])
@@ -352,11 +395,22 @@ for fname in fnames_list:
     else:
         net_input = net_input_saved
 
-    out_np = torch_to_np(net(net_input))
+    net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
+    # net_input_ = net_input_saved + (torch.ones_like(net_input_saved).uniform_(-torch.pi, torch.pi) * reg_noise_std)
+    vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
+    net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)
+    # out_np = torch_to_np(net(net_input))
+    out_np_batch = net(net_input).detach().cpu().numpy()
+    out_np = np.mean(out_np_batch, axis=0)
+    psrn_gt = compare_psnr(img_np, out_np)
+
+    wandb.log({'mean_inference_psnr_gt': psrn_gt,
+               **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
+                  for i in range(out_np_batch.shape[0])}})
     print('avg. training time - {}'.format(np.mean(training_times)))
-    log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
-    wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
-    wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
+    # log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
+    # wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
+    # wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
 
     # if args.index == -2:
     #     print(compare_psnr(img_np, out_np))
@@ -365,8 +419,9 @@ for fname in fnames_list:
     #     img_final_pil.save(os.path.join(save_dir, filename + '.png'))
     #     np.save(os.path.join(save_dir, filename), np.clip(out_np, 0, 1))
 
-    q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
-    plt.plot(psnr_gt_list)
-    plt.title('max: {}\nlast: {}'.format(max(psnr_gt_list), psnr_gt_list[-1]))
-    plt.show()
+    if False:
+        q = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
+        plt.plot(psnr_gt_list)
+        plt.title('max: {}\nlast: {}'.format(max(psnr_gt_list), psnr_gt_list[-1]))
+        plt.show()
     run.finish()

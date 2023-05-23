@@ -20,6 +20,7 @@ import tqdm
 # from skimage.measure import compare_psnr
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from video_consistency_check import SSIM3D
+from flopth import flopth
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -178,7 +179,7 @@ else:
                    upsample_mode='bilinear',
                    downsample_mode='stride',
                    need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
-                   act_fun='LeakyReLU').type(dtype)
+                   act_fun='LeakyReLU')#.type(dtype)
 
 # Compute number of parameters
 s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -208,6 +209,9 @@ def train_batch(batch_data):
             net_input = net_input_saved
     elif INPUT == 'fourier':
         net_input = net_input_saved
+
+    flops, params = flopth(net, inputs=(torch.zeros_like(net_input),))
+    print(flops, params)
 
     net_out = net(net_input)
     if mode == '3d':
@@ -256,7 +260,7 @@ run = wandb.init(project="Fourier features DIP",
                                                                           mode, sigma),
                  job_type='{}_{}'.format(INPUT, LR),
                  group='Denoising - Video',
-                 mode='online',
+                 mode='offline',
                  save_code=True,
                  config=log_config,
                  notes=''

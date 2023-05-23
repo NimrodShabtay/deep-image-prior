@@ -131,6 +131,9 @@ for path_to_image in fnames_list:
     elif args.net_type == 'FCN':
         net = FCN(input_depth, out_dim=output_depth,
                   hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
+    elif args.net_type == 'SimpleFCN':
+        net = SimpleFCN(input_depth, out_dim=output_depth,
+                        hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
     elif args.net_type == 'SIREN':
         net = SirenConv(in_features=input_depth, hidden_features=args.emb_size, hidden_layers=args.num_layers,
                         out_features=output_depth,

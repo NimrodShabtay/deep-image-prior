@@ -27,4 +27,4 @@ def get_poisson_image(img_np):
     img_noisy_np = random_noise(img_np, mode="poisson")
     img_noisy_pil = np_to_pil(img_noisy_np)
 
-    return img_noisy_pil, img_noisy_np
+    return img_noisy_pil, img_noisy_np.astype(np.float32)

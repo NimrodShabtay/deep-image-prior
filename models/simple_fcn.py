@@ -2,6 +2,26 @@ import torch
 import torch.nn as nn
 
 
+class SimpleFCN(nn.Module):
+
+    def __init__(self, in_dim, out_dim, hidden_list, ksize):
+        super().__init__()
+        layers = nn.ModuleList()
+        lastv = in_dim
+        for hidden in hidden_list:
+            layers.append(nn.Conv2d(lastv, hidden, kernel_size=(ksize, ksize), padding='same'))
+            layers.append(nn.ReLU())
+            lastv = hidden
+
+        layers.append(nn.Conv2d(lastv, out_dim, kernel_size=(ksize, ksize), padding='same'))
+        layers.append(nn.Sigmoid())
+        self.layers = layers
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
 class FCN(nn.Module):
 
     def __init__(self, in_dim, out_dim, hidden_list, ksize):
