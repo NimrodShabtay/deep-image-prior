@@ -64,11 +64,11 @@ def load_image(cap, resize=None):
 
 
 def select_frames(input_seq, factor=1):
-    #Assuming B, C, H, W
+    # Assuming B, C, H, W
     indices = [i for i in range(0, input_seq.shape[0], factor)]
     values = torch.index_select(input_seq, 0,
-                              torch.tensor(indices, dtype=torch.int32,
-                                           device=input_seq.device))
+                                torch.tensor(indices, dtype=torch.int32,
+                                             device=input_seq.device))
     return indices, values
 
 
@@ -79,9 +79,12 @@ class VideoDataset:
         self.sigma = sigma / 255
         self.mode = mode
         cap_video = cv2.VideoCapture(video_path)
+        if (cap_video.isOpened() == False):
+            print("Error opening video stream or file")
         self.n_frames = int(cap_video.get(cv2.CAP_PROP_FRAME_COUNT))
         self.org_width = int(cap_video.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.org_height = int(cap_video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(self.n_frames)
         self.task = task
         self.downsampler = DownsamplingSequence(factor=spatial_factor) if task == 'spatial_sr' else None
         self.images = []
@@ -96,6 +99,7 @@ class VideoDataset:
                     deg_img = np_to_torch(get_poisson_image(frame)[-1])
                 else:
                     raise ValueError('noise type {} is not supported'.format(noise_type))
+
                 self.degraded_images.append(deg_img)
 
             elif task == 'temporal_sr':
@@ -219,7 +223,7 @@ class VideoDataset:
         return batch_data
 
     def add_sequence_positional_encoding(self):
-        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs']-2,
+        freqs = self.freq_dict['base'] ** torch.linspace(0., self.freq_dict['n_freqs'],
                                                          steps=self.freq_dict['n_freqs'])
         # freqs = torch.Tensor([1])
         if self.input_type == 'infer_freqs':
@@ -237,7 +241,7 @@ class VideoDataset:
     def init_input(self):
         if self.input_type == 'infer_freqs':
             self.input = self.freq_dict['base'] ** torch.linspace(0.,
-                                                                  self.freq_dict['n_freqs'] - 1,
+                                                                  self.freq_dict['n_freqs'],
                                                                   steps=self.freq_dict['n_freqs'])
         else:
             self.input = get_input(self.input_depth, self.input_type, (self.crop_height, self.crop_width),
@@ -262,7 +266,7 @@ class VideoDataset:
             left = np.random.randint(0, W - Cw, B)
         cropped_inp, cropped_gt = [], []
         for i in range(B):
-            cropped_inp.append(inp[i, :, top[i]:top[i]+Ch, left[i]:left[i]+Cw])
+            cropped_inp.append(inp[i, :, top[i]:top[i] + Ch, left[i]:left[i] + Cw])
         for i in range(Bgt):
             cropped_gt.append(gt[i, :, top[i]:top[i] + Ch, left[i]:left[i] + Cw])
 

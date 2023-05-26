@@ -173,11 +173,12 @@ for fname in fnames_list:
                           skip_n33d=128,
                           skip_n11=4,
                           num_scales=5,
-                          act_fun='LeakyReLU',
+                          act_fun='sin',
                           upsample_mode='bilinear').type(dtype)
         elif args.net_type == 'MLP':
             net = MLP(input_depth, out_dim=output_depth,
-                      hidden_list=[args.emb_size for _ in range(args.num_layers)]).type(dtype)
+                      hidden_list=[args.emb_size for _ in range(args.num_layers)], act='gauss').type(dtype)
+                      # n_layers=args.num_layers, n_hidden_units=args.emb_size, act='gauss').type(dtype)
         elif args.net_type == 'FCN':
             net = FCN(input_depth, out_dim=output_depth,
                       hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)
@@ -238,12 +239,12 @@ for fname in fnames_list:
             else:
                 net_input = net_input_saved
         elif INPUT == 'fourier':
-            # net_input = net_input_saved
-            net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
+            net_input = net_input_saved
+            # net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
             # net_input_ = net_input_saved + \
             #              (torch.ones_like(net_input_saved).uniform_(-torch.pi, torch.pi) * reg_noise_std)
-            vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
-            net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)#.type(dtype)
+            # vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
+            # net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)#.type(dtype)
 
         elif INPUT == 'infer_freqs':
             if reg_noise_std > 0:
@@ -283,20 +284,19 @@ for fname in fnames_list:
         psrn_noisy = compare_psnr(img_noisy_np, out_np)
         psrn_gt = compare_psnr(img_np, out_np)
 
-
         if PLOT and i % show_every == 0:
             print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (
                 i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm))
-            # wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
-            #                                   caption='step {}'.format(i))}, commit=False)
+            wandb.log({'Fitting': wandb.Image(np.clip(np.transpose(out_np, (1, 2, 0)), 0, 1),
+                                              caption='step {}'.format(i))}, commit=False)
             # wandb.log({'Fitting-Smooth': wandb.Image(np.clip(np.transpose(out_avg.detach().cpu().numpy()[0],
             #                                                               (1, 2, 0)), 0, 1),
             #                                          caption='step {}'.format(i))}, commit=False)
             # visualize_fourier(out[0].detach().cpu(), iter=i)
-            wandb.log({'mean_inference_psnr_gt': psrn_gt,
-                       **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
-                          for i in range(out_np_batch.shape[0])}}, commit=False)
-            # wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
+            # wandb.log({'mean_inference_psnr_gt': psrn_gt,
+            #            **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
+            #               for i in range(out_np_batch.shape[0])}}, commit=False)
+            wandb.log({'psnr_gt': psrn_gt, 'psnr_noisy': psrn_noisy, 'psnr_gt_smooth': psrn_gt_sm}, commit=False)
         # Backtracking
         if i % show_every:
             if psrn_noisy - psrn_noisy_last < -2 and last_net is not None:
@@ -347,18 +347,18 @@ for fname in fnames_list:
     run = wandb.init(project="Fourier features DIP",
                      entity="impliciteam",
                      tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, freq_dict['method'],
-                           'denoising', supervision_type, args.net_type, str(sigma), 'Exp.-smoothing'],
+                           'denoising', supervision_type, args.net_type, str(sigma)],
                      name='{}_depth_{}_{}'.format(filename, input_depth, '{}'.format(INPUT)),
-                     job_type='{}_{}_{}_{}_{}'.format(args.net_type, INPUT, LR, supervision_type, args.win_len),
-                     group='Denoising - Dataset',
+                     job_type='gauss_mlp_{}_{}_{}'.format(args.net_type, INPUT, LR),
+                     group='ICCV - Rebuttle',
                      mode='online',
                      save_code=True,
                      config=log_config,
-                     notes='Exponential Smoothing - window length {}'.format(win_len)
+                     notes=''
                      )
 
     wandb.run.log_code(".", exclude_fn=lambda path: path.find('venv') != -1)
-    # log_input_images(img_noisy_np, img_np)
+    log_input_images(img_noisy_np, img_np)
     # visualize_fourier(img_noisy_torch[0].detach().cpu(), is_gt=True, iter=0)
     print('Number of params: %d' % s)
     print(net)
@@ -382,10 +382,10 @@ for fname in fnames_list:
     # wandb.log({'Forward time[sec]': np.mean(t_fwd), 'Backward time[sec]': np.mean(t_bwd),
     #            'Mean_net_training_time': np.mean(t_fwd) + np.mean(t_bwd)})
 
-    with open(f"results_pip_gt.csv", "a") as f:
-        f.write(','.join(str(x) for x in psnr_gt_list) + '\n')
-    with open(f"results_pip_gt_smooth.csv", "a") as f:
-        f.write(','.join(str(x) for x in psnr_gt_sm_list) + '\n')
+    # with open(f"results_pip_gt.csv", "a") as f:
+    #     f.write(','.join(str(x) for x in psnr_gt_list) + '\n')
+    # with open(f"results_pip_gt_smooth.csv", "a") as f:
+    #     f.write(','.join(str(x) for x in psnr_gt_sm_list) + '\n')
 
     if INPUT == 'infer_freqs':
         net_input = generate_fourier_feature_maps(net_input_saved, (img_pil.size[1], img_pil.size[0]), dtype,
@@ -395,22 +395,22 @@ for fname in fnames_list:
     else:
         net_input = net_input_saved
 
-    net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
+    # net_input_ = net_input_saved + (noise.normal_() * reg_noise_std)
     # net_input_ = net_input_saved + (torch.ones_like(net_input_saved).uniform_(-torch.pi, torch.pi) * reg_noise_std)
-    vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
-    net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)
-    # out_np = torch_to_np(net(net_input))
-    out_np_batch = net(net_input).detach().cpu().numpy()
-    out_np = np.mean(out_np_batch, axis=0)
+    # vp_cat = torch.cat((torch.cos(net_input_), torch.sin(net_input_)), dim=-1)
+    # net_input = vp_cat.flatten(-2, -1).permute(0, 3, 1, 2)
+    out_np = torch_to_np(net(net_input))
+    # out_np_batch = net(net_input).detach().cpu().numpy()
+    # out_np = np.mean(out_np_batch, axis=0)
     psrn_gt = compare_psnr(img_np, out_np)
 
-    wandb.log({'mean_inference_psnr_gt': psrn_gt,
-               **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
-                  for i in range(out_np_batch.shape[0])}})
+    # wandb.log({'mean_inference_psnr_gt': psrn_gt,
+    #            **{'inference_{}_psnr_gt'.format(i): compare_psnr(img_np, out_np_batch[i])
+    #               for i in range(out_np_batch.shape[0])}})
     print('avg. training time - {}'.format(np.mean(training_times)))
-    # log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
-    # wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
-    # wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
+    log_images(np.array([np.clip(out_np, 0, 1)]), num_iter, task='Denoising')
+    wandb.log({'PSNR-Y': compare_psnr_y(img_np, out_np)}, commit=True)
+    wandb.log({'PSNR-center': compare_psnr(img_np[:, 5:-5, 5:-5], out_np[:, 5:-5, 5:-5])}, commit=True)
 
     # if args.index == -2:
     #     print(compare_psnr(img_np, out_np))

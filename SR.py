@@ -31,6 +31,8 @@ parser.add_argument('--dataset_index', default=0, type=int)
 parser.add_argument('--net_type', default='skip', type=str)
 parser.add_argument('--num_layers', default=5, type=int)
 parser.add_argument('--emb_size', default=128, type=int)
+parser.add_argument('--dataset', default='Set5', type=str)
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -48,7 +50,7 @@ show_every = 100
 # e.g. x4/zebra_GT.png for factor=4, and x8/zebra_GT.png for factor=8
 
 if args.index == -1:
-    dataset_path = 'data/sr_datasets/Set5/images'
+    dataset_path = f'data/sr_datasets/{args.dataset}/images'
     fnames_list = sorted(glob.glob(dataset_path + '/*.*'))
     fnames = fnames_list
     if args.dataset_index != -1:
@@ -104,7 +106,7 @@ for path_to_image in fnames_list:
 
     ksize = 3
     if factor == 4:
-        num_iter = 2000
+        num_iter = 5001
         reg_noise_std = 0.03
     elif factor == 8:
         num_iter = 4001
@@ -127,7 +129,7 @@ for path_to_image in fnames_list:
 
     elif args.net_type == 'MLP':
         net = MLP(input_depth, out_dim=output_depth,
-                  hidden_list=[args.emb_size for _ in range(args.num_layers)]).type(dtype)
+                  hidden_list=[args.emb_size for _ in range(args.num_layers)], act='gauss').type(dtype)
     elif args.net_type == 'FCN':
         net = FCN(input_depth, out_dim=output_depth,
                   hidden_list=[args.emb_size for _ in range(args.num_layers)], ksize=ksize).type(dtype)

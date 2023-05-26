@@ -20,7 +20,6 @@ import tqdm
 # from skimage.measure import compare_psnr
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from video_consistency_check import SSIM3D
-from flopth import flopth
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -40,15 +39,13 @@ parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--num_freqs', default=8, type=int)
 parser.add_argument('--batch_size', default=6, type=int)
 parser.add_argument('--noise_type', default='gaussian', type=str)
-parser.add_argument('--noise_sigma', default=25, type=int)
-
 
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 imsize = -1
 PLOT = True
-sigma = args.noise_sigma
+sigma = 10
 mode = ['2d', '3d'][0]
 
 
@@ -102,11 +99,11 @@ vid_dataset = VideoDataset(args.input_vid_path,
                            input_type=INPUT,
                            num_freqs=args.num_freqs,
                            task='denoising',
+                           noise_type=args.noise_type,
                            sigma=sigma,
                            crop_shape=None,
                            batch_size=args.batch_size,
                            arch_mode=mode,
-                           noise_type=args.noise_type,
                            train=True,
                            temp_stride=1,
                            mode='cont')
@@ -116,10 +113,10 @@ vid_dataset_eval = VideoDataset(args.input_vid_path,
                                 input_type=INPUT,
                                 num_freqs=args.num_freqs,
                                 task='denoising',
+                                noise_type=args.noise_type,
                                 crop_shape=None,
                                 batch_size=args.batch_size,
                                 arch_mode=mode,
-                                noise_type=args.noise_type,
                                 train=False,
                                 temp_stride=1,
                                 mode='cont')
@@ -179,7 +176,7 @@ else:
                    upsample_mode='bilinear',
                    downsample_mode='stride',
                    need1x1_up=True, need_sigmoid=True, need_bias=True, pad='reflection',
-                   act_fun='LeakyReLU')#.type(dtype)
+                   act_fun='LeakyReLU').type(dtype)
 
 # Compute number of parameters
 s = sum([np.prod(list(p.size())) for p in net.parameters()])
@@ -209,9 +206,6 @@ def train_batch(batch_data):
             net_input = net_input_saved
     elif INPUT == 'fourier':
         net_input = net_input_saved
-
-    flops, params = flopth(net, inputs=(torch.zeros_like(net_input),))
-    print(flops, params)
 
     net_out = net(net_input)
     if mode == '3d':
@@ -255,12 +249,12 @@ filename = os.path.basename(args.input_vid_path).split('.')[0]
 run = wandb.init(project="Fourier features DIP",
                  entity="impliciteam",
                  tags=['{}'.format(INPUT), 'depth:{}'.format(input_depth), filename, vid_dataset.freq_dict['method'],
-                       '{}-PIP'.format(mode)],
+                       '{}-PIP'.format(mode), args.noise_type],
                  name='{}_depth_{}_{}_{}_sigma_{}'.format(filename, input_depth, '{}'.format(INPUT),
                                                                           mode, sigma),
-                 job_type='{}_{}'.format(INPUT, LR),
-                 group='Denoising - Video',
-                 mode='offline',
+                 job_type='full_temporal_range_{}_{}_{}'.format(INPUT, LR, args.noise_type),
+                 group='ICCV - Rebuttle',
+                 mode='online',
                  save_code=True,
                  config=log_config,
                  notes=''

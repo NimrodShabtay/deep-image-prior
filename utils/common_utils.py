@@ -182,10 +182,10 @@ def get_input(input_depth, method, spatial_size, noise_type='u', var=1. / 10, fr
             net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
         elif freq_dict['method'] == 'log':
             freqs = freq_dict['base'] ** torch.linspace(0., freq_dict['n_freqs'] - 1, steps=freq_dict['n_freqs'])
-            # net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
-            meshgrid_np = get_meshgrid(spatial_size)
-            meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
-            net_input = freqs * torch.unsqueeze(meshgrid, -1)
+            net_input = generate_fourier_feature_maps(freqs, spatial_size, only_cosine=freq_dict['cosine_only'])
+            # meshgrid_np = get_meshgrid(spatial_size)
+            # meshgrid = torch.from_numpy(meshgrid_np).permute(1, 2, 0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+            # net_input = freqs * torch.unsqueeze(meshgrid, -1)
 
     elif method == 'infer_freqs':
         meshgrid_np = get_meshgrid(spatial_size)
